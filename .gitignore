@@ -1,0 +1,25 @@
+# Build dependencies cloned for in-tree patch + build
+/deps/
+
+# Neovim build output (CMake)
+/build/
+/build-asan/
+/build-afl/
+/build-ubsan/
+/out/
+
+# AFL working directories
+/afl-findings/
+/afl-findings-*/
+/afl-snapshots/
+/afl-snapshots-*/
+/afl-corpus/
+/afl-corpus-*/
+/*.crash
+/.*.swp
+
+# Misc
+*.log
+*.tmp
+.cache/
+compile_commands.json

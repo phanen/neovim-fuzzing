@@ -1,0 +1,29 @@
+diff --git a/src/afl-forkserver.c b/src/afl-forkserver.c
+index d78de459..ee98bb53 100644
+--- a/src/afl-forkserver.c
++++ b/src/afl-forkserver.c
+@@ -2853,8 +2853,22 @@ fsrv_run_result_t __attribute__((hot)) afl_fsrv_run_target(
+ 
+     }
+ 
++    /* On slow targets (notably 64-bit ASAN) the forkserver can deliver
++       child_status a few ms after our poll() timed out, so try to
++       consume it before declaring a timeout. classify_result routes
++       WIFSIGNALED, WIFEXITED with MSAN/LSAN/CRASH_EXITCODE, and clean
++       exits correctly. */
++    if (read(fsrv->fsrv_st_fd, &fsrv->child_status, 4) == 4) {
++
++      goto classify_result;
++
++    } else {
++
++      exec_ms = 0;
++
++    }
++
+     fsrv->last_run_timed_out = 1;
+-    if (read(fsrv->fsrv_st_fd, &fsrv->child_status, 4) < 4) { exec_ms = 0; }
+ 
+   }
+ 
+

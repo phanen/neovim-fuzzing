@@ -1,0 +1,30 @@
+{
+  "repo_rev": "df252a5",
+  "runtime": {
+    "capture_rounds": 25,
+    "afl_fuzz": {
+      "patches": [
+        {
+          "sha256": "44a0daee9b0304d83ce99df49650aa9be611d7c13e9afd427981f1bd25f81e29",
+          "path": "patches/afl-forkserver.c.patch"
+        }
+      ],
+      "version": "afl-fuzz++5.03a",
+      "binary_sha256": "6decafa963b8b739e850d33df6369dcf8af690f32644822429ab14154a23b1c8"
+    },
+    "asan_options": "detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1:soft_rss_limit_mb=8192",
+    "nvim": {
+      "branch": "master",
+      "rev": "28818702e9",
+      "binary_sha256": "9509d3631dc47b86a143fef47e506759eb68f00de43e947d35e19c3a35f2db09",
+      "version_line": "28818702e94de0a606afb9d3fe39a76c1a37d026"
+    }
+  },
+  "asan_in_repros": 0,
+  "saved_crashes": 0,
+  "date": "2026-07-18_161949",
+  "ts": "2026-07-18T16:19:49Z",
+  "duration": "1s",
+  "reporos_generated": 0,
+  "reporos": []
+}

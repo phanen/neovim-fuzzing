@@ -1,0 +1,37 @@
+# scripts/afl-denylist.txt
+# AFL sanitizer-coverage denylist consumed via the AFL_LLVM_DENYLIST
+# environment variable. Source files matched here are skipped during
+# AFL's PCGUARD coverage instrumentation.
+#
+# Why: deps/neovim's build-time codegen step (`gen_*.lua`) `dlopen()`s
+# `libnlua0.so` through the system `luajit`, which is NOT linked
+# against the AFL runtime. The `nlua0` target in deps/neovim/src/nvim/CMakeLists.txt
+# is a MODULE library that bundles `src/nlua0.c` plus the msgpack
+# implementations under `src/mpack/` (conv.c, lmpack.c, mpack_core.c,
+# object.c, rpc.c) into a single shared module. ALL of those object
+# files need to be excluded from AFL instrumentation, otherwise the
+# resulting `libnlua0.so` references `__afl_area_ptr` and similar
+# symbols that the host `luajit` cannot resolve, so `dlopen` fails
+# and the build aborts before any nvim binary is produced.
+#
+# These files are build-time helpers only; they do not run as part of
+# the fuzzer target, so excluding them from AFL instrumentation does
+# not reduce coverage on the nvim binary itself.
+#
+# Pattern syntax: AFL 5.0 PCGUARD uses fnmatch(3) with FNM_PATHNAME
+# semantics, so `*` matches any chars EXCEPT `/`. A pattern like
+# `*/src/nlua0.c` does NOT match `/foo/bar/src/nlua0.c` because the
+# `*` cannot cross path separators. Use a basename pattern instead,
+# which is the simplest and most portable form:
+#
+#   src:nlua0.c        -> matches any path ending in `nlua0.c`
+#   src:mpack/conv.c   -> basename `mpack/conv.c` is still fnmatch; OK
+#
+# Keep the list narrow; if you add a new build-time helper that goes
+# into the same `nlua0` target, add it here.
+src:nlua0.c
+src:mpack/conv.c
+src:mpack/lmpack.c
+src:mpack/mpack_core.c
+src:mpack/object.c
+src:mpack/rpc.c

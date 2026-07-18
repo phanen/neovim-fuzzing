@@ -1,0 +1,199 @@
+# .github/workflows/daily-fuzz.yml
+# Runs bin/daily-fuzz.lua once a day. Persists the report directory
+# under reports/<UTC-date>/ and commits it back so it lands in the
+# repo's history. The same artifact set is uploaded for download via
+# GitHub's UI in case the auto-commit step fails (e.g. branch
+# protection blocks the push).
+#
+# Trigger:
+#   - schedule: every day at 00:00 UTC
+#   - workflow_dispatch: run manually from the Actions tab
+#
+# Runtime without cache: ~1h 5m (60m fuzz + ~5m build/cleanup).
+# With warm cache (same SHA): ~5min (only the AFL session + report).
+# Job timeout 90m for headroom.
+name: Daily fuzz
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: "Fuzz duration in minutes (default 60 = 1 hour)"
+        required: false
+        default: "60"
+
+permissions:
+  contents: write
+
+# Cancel any in-flight run when a new dispatch lands; otherwise the
+# two commit-and-push steps race on the remote. cancel-in-progress
+# is also enabled for PR-triggered workflows (currently nothing
+# triggers this on PRs, so this is dispatch-only behavior in
+# practice). Manual `gh workflow run` back-to-back would otherwise
+# commit an empty or stale revision on the slower one.
+concurrency:
+  group: daily-fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  daily-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      AFL_FUZZ_BIN: /usr/local/bin/afl-fuzz
+      AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES: "1"
+      DURATION_MIN: ${{ github.event.inputs.duration_minutes || '60' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            afl++ build-essential cmake gettext lua5.1 ninja-build \
+            pkg-config unzip ca-certificates curl git jq
+
+      - name: Set up nightly Neovim
+        # bin/from-log.lua's shebang is `#!/usr/bin/env -S nvim -l`
+        # and the Lua orchestrator bin/daily-fuzz.lua is the same;
+        # both need a `nvim` on PATH before any of the nvim-afl
+        # build steps run. The prebuilt nightly (vs apt's 0.10 on
+        # noble) also keeps from-log.lua's iterators/closures aligned
+        # with the nvim-afl build's runtime.
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          vim: false
+          version: nightly
+
+      - name: Build patched afl-fuzz
+        # Stock afl++ misclassifies late ASAN-signal exits as timeouts
+        # (see patches/afl-forkserver.c.patch for the upstream bug).
+        # Build our own afl-fuzz with the race fix and install it
+        # ahead of the apt binary. The patch's line context has enough
+        # slack to survive upstream drift; we apply it against whatever
+        # commit HEAD points to (the user's local a8ecc704 patch isn't
+        # pushed publicly so we can't pin to it).
+        env:
+          ROOT: ${{ github.workspace }}
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/AFLplusplus/AFLplusplus /tmp/aflpp
+          cd /tmp/aflpp
+          patch -p1 < "$ROOT/patches/afl-forkserver.c.patch"
+          grep -q "On slow targets (notably 64-bit ASAN)" src/afl-forkserver.c \
+            || { echo "FATAL: patch anchor missing from src/afl-forkserver.c" >&2; exit 1; }
+          make afl-fuzz -j"$(nproc)" 2>&1 | tail -3
+          sudo install -m755 afl-fuzz /usr/local/bin/afl-fuzz
+
+      - name: Restore deps/neovim checkout cache
+        # deps/neovim clone is ~50s of network + checkout. Keyed on
+        # github.sha so re-runs of the same commit hit; new commits
+        # rebuild. restore-keys let a brand-new SHA still reuse the
+        # most recent prior clone (loses HEAD accuracy but saves time
+        # for cron re-runs across days).
+        id: cache_neovim_checkout
+        uses: actions/cache@v4
+        with:
+          path: deps/neovim
+          key: neovim-checkout-${{ github.sha }}
+          restore-keys: neovim-checkout-
+
+      - name: Clone deps/neovim (skip if cached)
+        # `actions/cache` reports cache-hit=false even on a partial
+        # restore-keys match, but the files are still on disk. Check
+        # for an existing checkout instead of trusting the output.
+        run: |
+          if [[ ! -d deps/neovim/.git ]]; then
+            git clone --depth 100 https://github.com/neovim/neovim.git deps/neovim
+            cd deps/neovim && git fetch --unshallow
+          else
+            echo "deps/neovim already present (cache restored); skipping clone"
+          fi
+
+      - name: Restore bundled neovim deps cache
+        # cmake.deps builds libuv, luv, lpeg, treesitter, utf8proc,
+        # unibilium into deps/neovim/.deps/usr. ~30-60s on a fresh
+        # runner. Keyed on github.sha + cmake.deps content so the
+        # same private commit with the same cmake.deps = cache hit.
+        id: cache_neovim_deps
+        uses: actions/cache@v4
+        with:
+          path: deps/neovim/.deps
+          key: >-
+            neovim-deps-${{ github.sha }}-${{
+            hashFiles('deps/neovim/cmake.deps/CMakeLists.txt') }}
+          restore-keys: neovim-deps-
+
+      - name: Build bundled neovim deps (skip if cached)
+        run: |
+          if [[ ! -d deps/neovim/.deps/usr/lib/cmake ]]; then
+            cd deps/neovim
+            make deps -j"$(nproc)"
+          else
+            echo "deps/neovim/.deps already populated (cache restored); skipping build"
+          fi
+
+      - name: Restore nvim-afl build cache
+        # The full afl+ASAN nvim build (build-nvim-afl.sh --asan)
+        # takes ~3-5min because every TU gets afl-clang-lto
+        # instrumentation + ASAN. Key on SHA + the build config:
+        # the build script + the top-level CMakeLists.txt that
+        # controls nlua0 sanitizer exemption. No restore-keys: an
+        # older nvim build doesn't match newer deps/neovim source,
+        # so a partial restore would silently feed stale .o files
+        # to the link step.
+        id: cache_nvim_build
+        uses: actions/cache@v4
+        with:
+          path: deps/neovim/build-afl
+          key: >-
+            nvim-afl-build-${{ github.sha }}-${{
+            hashFiles('scripts/build-nvim-afl.sh',
+                     'deps/neovim/CMakeLists.txt',
+                     'patches/afl-forkserver.c.patch') }}
+
+      - name: Run daily fuzz
+        run: |
+          set -x
+          # DURATION_MIN env comes from workflow_dispatch input;
+          # default 60. daily-fuzz.sh internally calls Lua helpers
+          # (e.g. bin/write-json-report.lua via `nvim -l`) so the
+          # JSON serialization stays in a single language.
+          bash scripts/daily-fuzz.sh \
+            --duration $(( ${DURATION_MIN:-60} * 60 ))
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-fuzz-${{ github.run_id }}
+          path: reports/
+          if-no-files-found: ignore
+
+      - name: Commit report back to repo
+        if: always()
+        run: |
+          set -x
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Pick the directory produced by this run (lexicographic max
+          # in reports/); multiple runs in the same minute would collide
+          # but `git add` will stage only the diff against HEAD.
+          if [[ -d reports ]]; then
+            git add reports/
+            if ! git diff --cached --quiet; then
+              LATEST=$(ls -1 reports/ | sort | tail -1)
+              git commit -m "ci(daily-fuzz): persist report for $LATEST"
+              git push
+            else
+              echo "no diff for reports/, skipping push"
+            fi
+          else
+            echo "no reports/ to commit"
+          fi

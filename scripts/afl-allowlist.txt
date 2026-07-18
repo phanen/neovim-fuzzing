@@ -1,0 +1,76 @@
+# Allowlist for AFL++ LTO instrumentation.
+#
+# Why allowlist vs denylist:
+# nvim's binary is huge (~40MB). Instrumenting every translation unit
+# blows up coverage map size and slows the dispatcher. allowlist
+# keeps instrumentation focused on the surface that actually
+# contains the bugs we want to find (C API + window + marktree +
+# extmark). The LuaJIT side, the TUI, and the codegen helpers are
+# excluded -- they cannot crash in our --headless fuzz path.
+#
+# Stability:
+# The denylist (afl-denylist.txt) excludes a few specific files that
+# would break the build (libnlua0.so symbol collisions). The allowlist
+# is the opposite direction: only the files listed here get
+# instrumented. When both are set, AFL++ prefers the allowlist (it
+# overrides the default "instrument everything" behavior).
+#
+# Kevin Goodsell saw stability climb to 100% with a similar allowlist
+# in 06-improvements of his fuzzing-nvim repo. Our allowlist is a
+# superset covering all surfaces our fuzzers touch (win/buf/tab/
+# autocmd/extmark/keys/etc).
+
+# --- Extmark + window layout (highest-value historical crash class) ---
+src/nvim/marktree.c
+src/nvim/extmark.c
+src/nvim/mark.c
+
+# --- Window/buffer/tabpage API dispatch ---
+src/nvim/api/window.c
+src/nvim/api/buffer.c
+src/nvim/api/tabpage.c
+src/nvim/api/autocmd.c
+src/nvim/api/extmark.c
+src/nvim/api/options.c
+src/nvim/api/ui.c
+src/nvim/api/deprecated.c
+src/nvim/api/command.c
+src/nvim/api/vim.c
+src/nvim/api/keysets.c
+
+# --- High-level implementation behind those APIs ---
+src/nvim/window.c
+src/nvim/buffer.c
+src/nvim/tabpage.c
+src/nvim/autocmd.c
+src/nvim/buffer_updates.c
+src/nvim/option.c
+src/nvim/options.c
+src/nvim/ui.c
+src/nvim/ui_client.c
+src/nvim/ui_server.c
+src/nvim/ex_cmds.c
+src/nvim/eval.c
+src/nvim/eval/funcs.c
+src/nvim/eval/userfunc.c
+src/nvim/eval/typval.c
+src/nvim/eval/typval_encode.c.h
+src/nvim/normal.c
+src/nvim/terminal.c
+src/nvim/termkey.c
+src/nvim/screen.c
+src/nvim/grid.c
+src/nvim/redraw.c
+src/nvim/highlight_group.c
+src/nvim/highlight.c
+src/nvim/drawline.c
+src/nvim/drawscreen.c
+src/nvim/api/private/helpers.c
+
+# --- Lua-driven dispatch (nlua_call) ---
+# Excluding nlua0 (build-time codegen helper) and luv internals;
+# keep the nlua entry points so callbacks fired by our fuzzer count.
+src/nvim/lua/executor.c
+src/nvim/lua/vim.c
+src/nvim/lua/ref.c
+src/nvim/lua/lua.c
