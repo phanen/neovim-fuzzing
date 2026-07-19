@@ -158,6 +158,51 @@ run_fuzz() {
     cp -r "$FINDINGS/default" "$SNAPSHOT" 2>/dev/null || true
 }
 
+# Collapse AFL saved crashes via afl-cmin before per-crash repro.
+# A fuzz session typically emits many inputs that hit the same ASAN
+# site (same edge coverage), so the 50+ crash files in default/crashes/
+# often collapse to 1-3 unique ones. Doing this here turns an O(N)
+# repro loop into O(unique). Per-crash repro+minimize is still needed
+# because afl-cmin returns AFL binary inputs, not Lua repros.
+afl_cmin_crashes() {
+  local FINDINGS="$ROOT/afl-findings/daily-$DATE"
+  local CRASHES="$FINDINGS/default/crashes"
+  local UNIQ="$FINDINGS/uniq-crashes"
+  [[ -d "$CRASHES" ]] || return 0
+  shopt -s nullglob
+  local n=$(printf '%s\n' "$CRASHES"/id:* | wc -l)
+  shopt -u nullglob
+  (( n > 0 )) || { echo "no crashes to collapse" >&2; return 0; }
+  (( n > 1 )) || { echo "only 1 crash; afl-cmin unnecessary" >&2; export REPRO_FINDINGS_DIR="$CRASHES"; return 0; }
+
+  local cmin
+  cmin=$(command -v afl-cmin 2>/dev/null || true)
+  [[ -x "$cmin" ]] || { echo "WARN: afl-cmin not found; using full crash set" >&2; export REPRO_FINDINGS_DIR="$CRASHES"; return 0; }
+
+  rm -rf "$UNIQ"
+  mkdir -p "$UNIQ"
+  echo "==> afl-cmin collapsing $n crash(es)..."
+  if ASAN_OPTIONS="$FUZZ_ASAN_OPTIONS" \
+       ROUNDS="$CAPTURE_ROUNDS" \
+       "$cmin" -C -i "$CRASHES" -o "$UNIQ" -m none -t 5000 \
+         -- "$NVIM_BIN" \
+           --headless --clean -i NONE -n \
+           -l "$ROOT/fuzz-crashhunter.lua" \
+           @@ \
+       >"$REPORT_DIR/afl-cmin.log" 2>&1; then
+    :
+  fi
+  local uniq_n
+  uniq_n=$(ls -1 "$UNIQ"/id:* 2>/dev/null | wc -l || echo 0)
+  echo "==> afl-cmin kept $uniq_n / $n crash(es) (see $REPORT_DIR/afl-cmin.log)"
+  if (( uniq_n > 0 )); then
+    export REPRO_FINDINGS_DIR="$UNIQ"
+  else
+    echo "WARN: afl-cmin produced no output; falling back to full crash set" >&2
+    export REPRO_FINDINGS_DIR="$CRASHES"
+  fi
+}
+
 # Convert every AFL saved crash into a self-contained (minimized) repro.
 # Call repro-from-crash.sh directly per crash -- repro-all.sh iterates
 # over a crash DIR and writes to $ROOT/repros/, neither matches this
@@ -165,46 +210,62 @@ run_fuzz() {
 # captured alongside). repro-from-crash.sh writes repro.lua, .min.lua,
 # and .dofile.lua to whatever $2 points at.
 generate_repros() {
-  local FINDINGS="$ROOT/afl-findings/daily-$DATE/default/crashes"
+  local FINDINGS="${REPRO_FINDINGS_DIR:-$ROOT/afl-findings/daily-$DATE/default/crashes}"
   local REPRO_OUT="$REPORT_DIR/repros"
   [[ -d "$FINDINGS" ]] || { echo "no findings at $FINDINGS" >&2 ; return 0 ;}
   shopt -s nullglob
-  local crashes=( "$FINDINGS"/id:* )
+  local raw=( "$FINDINGS"/id:* )
   shopt -u nullglob
-  [[ ${#crashes[@]} -gt 0 ]] || { echo "no crashes saved" >&2 ; return 0 ;}
+  local crashes=()
+  for c in "${raw[@]}"; do
+    [[ -f "$c" ]] || continue
+    case "$c" in
+      *.repro.lua|*.min.lua) continue ;;
+    esac
+    crashes+=( "$c" )
+  done
+  [[ ${#crashes[@]} -gt 0 ]] || { echo "no crash inputs to process" >&2 ; return 0 ;}
 
-  echo "==> generating reporos for ${#crashes[@]} crash(es)..."
+  # Total wall-clock budget for this stage. Workflow timeout-minutes is
+  # 120; fuzz uses DURATION (default 60min); teardown + write_json_report
+  # need ~5min. Default 50min for repro+minimize leaves 5min slack.
+  local budget_sec="${GENERATE_REPROS_BUDGET_SEC:-3000}"
+  local start_ts=$(date +%s)
+  export start_ts budget_sec REPRO_OUT ROOT \
+         ASAN_OPTIONS_FOR_REPRO="$REPRO_ASAN_OPTIONS"
+
+  echo "==> generating reporos for ${#crashes[@]} crash(es) (budget=${budget_sec}s, parallel=$(nproc))..."
+
   # Per-crash directory layout: reports/<date>/repros/<id>/{crash.bin,
   # repro.lua, repro.min.lua, verify.err}. The <id> matches what
   # write_md_report / write_json_report use, so the on-disk path and
   # the report's per-crash key line up.
-  for crash in "${crashes[@]}"; do
-    [[ -f "$crash" ]] || continue
-    case "$crash" in
-      *.repro.lua|*.min.lua) continue ;;
-    esac
-    local id out
-    # Sanitize: colons break NTFS (artifact upload downloads as zip on
-    # Windows runners); also matches the sanitization used by
-    # write_md_report / write_json_report so the on-disk path and the
-    # report's per-crash key line up.
-    id=$(basename "$crash" | tr ',/:' '____')
-    out="$REPRO_OUT/$id/repro.lua"
-    mkdir -p "$(dirname "$out")"
-    # Preserve the raw AFL input bytes alongside the repro. Self-contained
-    # repros are ~MB-scale but lossy (repro.from-log.lua rebuilds ops from
-    # the dispatch log; bin/from-log.lua can't recover an ASAN-aborted
-    # partial capture); crash.bin is the ground truth for re-fuzzing with
-    # different ROUNDS / seeds / seeds, and it's what fuzz-crashhunter.lua
-    # wants to reproduce against.
-    cp -f "$crash" "$REPRO_OUT/$id/crash.bin"
-    if ASAN_OPTIONS_FOR_REPRO="$REPRO_ASAN_OPTIONS" \
-         bash "$ROOT/scripts/repro-from-crash.sh" --minimize "$crash" "$out"; then
-      echo "  [$id] OK"
-    else
-      echo "  [$id] FAILED"
-    fi
-  done
+  printf '%s\n' "${crashes[@]}" \
+    | xargs -P "$(nproc)" -I{} bash -c '
+        set -euo pipefail
+        crash="$1"
+        elapsed=$(( $(date +%s) - start_ts ))
+        if (( elapsed >= budget_sec )); then
+          echo "  [$(basename "$crash")] SKIP (budget exhausted at ${elapsed}s)"
+          exit 0
+        fi
+        # Sanitize: colons break NTFS (artifact upload downloads as zip
+        # on Windows runners); matches write_json_report keying.
+        id=$(basename "$crash" | tr ",/:" "____")
+        out="$REPRO_OUT/$id/repro.lua"
+        mkdir -p "$(dirname "$out")"
+        # Preserve the raw AFL input bytes alongside the repro.
+        # Self-contained repros are lossy (from-log.lua rebuilds ops
+        # from the dispatch log; partial ASAN-aborted captures are not
+        # always recoverable); crash.bin is ground truth for re-fuzzing.
+        cp -f "$crash" "$REPRO_OUT/$id/crash.bin"
+        if ASAN_OPTIONS_FOR_REPRO="$ASAN_OPTIONS_FOR_REPRO" \
+             bash "$ROOT/scripts/repro-from-crash.sh" --minimize "$crash" "$out"; then
+          echo "  [$id] OK"
+        else
+          echo "  [$id] FAILED"
+        fi
+      ' _ {}
 }
 
 # Build report.json. The on-disk layout is report.json only; any
@@ -300,11 +361,20 @@ main() {
   refresh_neovim   || return 1
   mkdir_corpus
   run_fuzz
+  afl_cmin_crashes || true
   generate_repros
   write_json_report
   echo
   echo "==> done. json: $REPORT_DIR/report.json"
   return 0
 }
+
+_on_term=0
+trap '_on_term=1; exit 143' TERM INT
+trap '
+  if [[ "$_on_term" == 1 && -d "$REPORT_DIR" && ! -f "$REPORT_DIR/report.json" ]]; then
+    write_json_report || true
+  fi
+' EXIT
 
 main "$@"

@@ -40,7 +40,7 @@ concurrency:
 jobs:
   daily-fuzz:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       AFL_FUZZ_BIN: /usr/local/bin/afl-fuzz
       AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES: "1"
@@ -71,14 +71,18 @@ jobs:
           vim: false
           version: nightly
 
-      - name: Build patched afl-fuzz
+      - name: Build patched AFL++ binaries
         # Stock afl++ misclassifies late ASAN-signal exits as timeouts
         # (see patches/afl-forkserver.c.patch for the upstream bug).
-        # Build our own afl-fuzz with the race fix and install it
-        # ahead of the apt binary. The patch's line context has enough
-        # slack to survive upstream drift; we apply it against whatever
-        # commit HEAD points to (the user's local a8ecc704 patch isn't
-        # pushed publicly so we can't pin to it).
+        # Build our own afl-fuzz + afl-cmin with the race fix and install
+        # them ahead of the apt binary. afl-cmin.bash comes from the same
+        # AFLplusplus tree so its edge-trace protocol matches the patched
+        # afl-fuzz's forkserver; apt's stock afl-cmin talks to the
+        # unpatched forkserver and mis-classifies the same crashes.
+        # The patch's line context has enough slack to survive upstream
+        # drift; we apply it against whatever commit HEAD points to (the
+        # user's local a8ecc704 patch isn't pushed publicly so we can't
+        # pin to it).
         env:
           ROOT: ${{ github.workspace }}
         run: |
@@ -88,8 +92,13 @@ jobs:
           patch -p1 < "$ROOT/patches/afl-forkserver.c.patch"
           grep -q "On slow targets (notably 64-bit ASAN)" src/afl-forkserver.c \
             || { echo "FATAL: patch anchor missing from src/afl-forkserver.c" >&2; exit 1; }
-          make afl-fuzz -j"$(nproc)" 2>&1 | tail -3
+          # afl-fuzz is the only binary that needs compilation; afl-cmin
+          # is already a pure-bash script in the source tree.
+          make afl-fuzz -j"$(nproc)" 2>&1 | tail -5
           sudo install -m755 afl-fuzz /usr/local/bin/afl-fuzz
+          sudo install -m755 afl-cmin.bash /usr/local/bin/afl-cmin
+          /usr/local/bin/afl-fuzz --version 2>&1 | head -1
+          /usr/local/bin/afl-cmin --help 2>&1 | head -3
 
       - name: Restore deps/neovim checkout cache
         # deps/neovim clone is ~50s of network + checkout. Keyed on
