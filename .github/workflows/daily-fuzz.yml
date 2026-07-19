@@ -168,13 +168,13 @@ jobs:
           bash scripts/daily-fuzz.sh \
             --duration $(( ${DURATION_MIN:-60} * 60 ))
 
-      - name: Upload artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: daily-fuzz-${{ github.run_id }}
-          path: reports/
-          if-no-files-found: ignore
+      # - name: Upload artifacts
+      #   if: always()
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: daily-fuzz-${{ github.run_id }}
+      #     path: reports/
+      #     if-no-files-found: ignore
 
       - name: Commit report back to repo
         if: always()
@@ -182,9 +182,12 @@ jobs:
           set -x
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Pick the directory produced by this run (lexicographic max
-          # in reports/); multiple runs in the same minute would collide
-          # but `git add` will stage only the diff against HEAD.
+          git fetch origin master
+          if ! git rebase origin/master; then
+            echo "::error::rebase onto origin/master failed"
+            git rebase --abort || true
+            exit 1
+          fi
           if [[ -d reports ]]; then
             git add reports/
             if ! git diff --cached --quiet; then
