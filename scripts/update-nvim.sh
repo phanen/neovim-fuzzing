@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # scripts/update-nvim.sh
-# Pull latest nvim master into deps/neovim and rebuild the ASan binary.
-# Re-runs scripts/build-nvim.sh which preserves our two local patches:
-#   1. the fz_no_sanitize_nlua0 patch (in src/nvim/CMakeLists.txt) that
-#      keeps nlua0 un-sanitized so its dlopen by luajit doesn't trip the
-#      ASan runtime init ordering
-#   2. nothing else
+# Pull latest nvim master into deps/neovim and rebuild the AFL+ASan
+# binary (deps/neovim/build-afl/bin/nvim). The fuzzer and repro
+# pipeline both target this binary; the regular ASan build at
+# out/nvim is for post-mortem debugging only.
 #
 # Usage:
 #   scripts/update-nvim.sh             # pull + rebuild
@@ -14,7 +12,7 @@
 #
 # Side effects:
 #   - deps/neovim working tree is fast-forwarded (or merged with ours)
-#   - out/nvim is rebuilt and replaced
+#   - deps/neovim/build-afl/bin/nvim is rebuilt and replaced
 #   - any prior crash artifacts in out/ stay around
 
 set -euo pipefail
@@ -63,9 +61,10 @@ else
 fi
 
 if (( DO_BUILD )); then
-  echo "update-nvim: rebuilding ASan build..."
-  "$ROOT/scripts/build-nvim.sh"
-  echo "update-nvim: done.  out/nvim updated."
+  echo "update-nvim: rebuilding AFL+ASan build..."
+  ASAN_OPTIONS="detect_leaks=0:abort_on_error=0" \
+    "$ROOT/scripts/build-nvim-afl.sh" --asan
+  echo "update-nvim: done.  deps/neovim/build-afl/bin/nvim updated."
 else
   echo "update-nvim: --no-build set, skipping build"
 fi
