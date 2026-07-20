@@ -1,40 +1,9 @@
 #!/usr/bin/env bash
-# scripts/repro-from-crash.sh — Generate a SELF-CONTAINED standalone
-# reproducer for a saved AFL crash input.
-#
-# The captured dispatch log goes through `bin/from-log.lua` to emit a
-# single repro.lua that does NOT depend on fuzz-crashhunter.lua, dofile, or any
-# input file. It reproduces the bug 100% on the ASan nvim build.
-#
-# - First we capture the fuzzer dispatch log via fuzz-crashhunter.lua's
-#   `log=path` argument so we know exactly which vim.api / vim.cmd
-#   sequence was running when AFL hit the crash.
-# - Then from-log.lua parses the log, groups ops by round (mirroring
-#   the fuzzer's `for round=1,ROUNDS` per-iteration reset), and emits
-#   an explicit sequence with stub callbacks for WinLeave / WinClosed /
-#   BufUnload that mirror the bodies of fuzz-crashhunter.lua's scenarios
-#   (otherwise the WinClosed handler hits "E117: Unknown function"
-#   and the reentrancy path the bug lives on is never taken).
-# - The repro ends with a final teardown (closes all open windows and
-#   deletes all scratch bufs) that runs the `close_windows` ->
-#   `do_buffer_ext` -> `nvim_buf_delete` path which is the UAF source.
-#
-# Pass --minimize to additionally shrink the repro via
-# `scripts/minimize-repro.sh` (delta-debug rounds + per-op + whole-round
-# drop). End-to-end one-command pipeline:
-#   scripts/repro-from-crash.sh --minimize <crash-file>
-#
-# Run the repro with the same patched-AFL+ASAN build that produced
-# the crash:
-#
-#   VIMRUNTIME=./deps/neovim/runtime \
-#   ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1" \
-#   ./deps/neovim/build-afl/bin/nvim --headless --clean -i NONE -n \
-#     -l <out>.repro.lua
-#
-# Expected: rc=134 (SIGABRT) and an AddressSanitizer
-# heap-use-after-free report on stderr pointing at close_windows /
-# do_buffer_ext.
+# scripts/repro-from-crash.sh -- generate a self-contained Lua repro
+# for a saved AFL crash. Runs fuzz-crashhunter.lua on the crash bytes
+# to capture the dispatch log, then bin/from-log.lua translates that
+# log into repro.lua. Pass --minimize to additionally delta-debug
+# shrink the result via scripts/minimize-repro.sh.
 #
 # Usage:
 #   scripts/repro-from-crash.sh [--minimize] <crash-file> [<out-repro.lua>]
@@ -68,7 +37,6 @@ fi
 [ ! -f "$crash_file" ] && { echo "not a file: $crash_file" >&2; exit 2; }
 
 abs_crash="$(cd "$(dirname "$crash_file")" && pwd)/$(basename "$crash_file")"
-# Default output: alongside the crash, named <crash>.repro.lua
 [ -n "$out_repro" ] || out_repro="${abs_crash%.???}.repro.lua"
 
 mkdir -p /tmp/repro-from-crash
@@ -85,22 +53,11 @@ ROUNDS="${REPRO_CAPTURE_ROUNDS:-25}" FUZZ_QUIET=1 VIMRUNTIME="$ROOT/deps/neovim/
       "log=$log_path" \
       2>/tmp/repro-from-crash/run.err || true
 
-# Step 2: emit self-contained repro.lua from the dispatch log.
 echo "step 2/3: bin/from-log.lua -> $out_repro"
 bin/from-log.lua "$log_path" "$out_repro"
 
-# Append a self-test footer that prints the runtime checks for
-# whether ASAN recovered a violation during the script. Footer
-# uses repo-root-relative paths (anchored on $ROOT) so the repro
-# is portable across CI runners and local dev. ASAN_OPTIONS comes
-# from the daily-fuzz.sh caller (so the footer matches the actual
-# ASAN_OPTIONS used to capture this crash, not a hardcoded copy
-# that could drift).
-#
-# Default to a minimal capture-step opts if the caller didn't pass
-# ASAN_OPTIONS_FOR_REPRO. daily-fuzz.sh always passes its own.
 asan_opts="${ASAN_OPTIONS_FOR_REPRO:-detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1}"
-rel_crash="${abs_crash#$ROOT/}"  # strip repo-root prefix
+rel_crash="${abs_crash#$ROOT/}"
 echo "-- " >> "$out_repro"
 echo "-- Source crash: $rel_crash ($(wc -c < "$abs_crash") bytes)" >> "$out_repro"
 echo "-- Run with (from repo root):" >> "$out_repro"
@@ -109,9 +66,6 @@ echo '--   deps/neovim/build-afl/bin/nvim --headless --clean -i NONE -n \' >> "$
 echo "--     -l <this-repro>" >> "$out_repro"
 echo "-- Expected: rc=134 and an AddressSanitizer report." >> "$out_repro"
 
-# Step 3: verify the generated repro actually crashes with ASAN.
-# Uses scripts/_lib-asan.sh so the run/check logic is shared with
-# scripts/repro-all.sh and any future caller.
 echo "step 3/3: verify repro triggers ASAN"
 REPRO_NVIM="$ROOT/deps/neovim/build-afl/bin/nvim" \
   source "$ROOT/scripts/_lib-asan.sh"

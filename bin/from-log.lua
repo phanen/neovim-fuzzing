@@ -58,8 +58,7 @@ end
 -- `-- (not modeled) <name>` comment so the repro at least shows
 -- the dispatch sequence to a human reader.
 local function not_modeled(name)
-  emit(('-- (not modeled: %s -- requires re-running fuzz-crashhunter.lua with'
-    .. ' same input to trigger)'):format(name))
+  emit('-- not modeled: ' .. name .. ' (requires fuzz-crashhunter.lua replay)')
 end
 
 -- Mirror of fuzz-crashhunter.lua's ser_arg: render a value as a
@@ -97,40 +96,19 @@ local function ser_arg(v)
   return string.format('"<%s not serializable>"', t)
 end
 
-emit('-- Auto-generated from ' .. log_path)
-emit('-- by bin/from-log.lua.  Reproduces a captured fuzz-crashhunter.lua run.')
-emit('-- Run with the ASan/UBSan-enabled nvim:')
-emit('--   VIMRUNTIME=./deps/neovim/runtime \\')
-emit('--   ASAN_OPTIONS="detect_leaks=0:abort_on_error=0" \\')
-emit('--   out/nvim --headless --clean -i NONE -n -l ' .. out_path)
-emit('')
 emit('vim.o.swapfile = false')
 emit('vim.o.shadafile = "NONE"')
 emit('local api = vim.api')
 emit('local function safe(fn, ...) return pcall(fn, ...) end')
 emit('')
-emit('-- Stub callbacks for captured autocmd registrations. The fuzzer')
-emit('-- scenarios wire real closures to WinLeave / WinClosed /')
-emit('-- BufUnload that open floats, close windows, or delete buffers')
-emit('-- during autocmd dispatch, which is the reentrancy path the')
-emit('-- bug lives on. The ser_arg sentinel `function` placeholder in')
-emit('-- cap.log has no callable body, so without these stubs the')
-emit('-- WinClosed handler is a no-op and the bug-triggering code')
-emit('-- path (close_windows -> do_buffer_ext UAF) is never reached.')
 emit('local _stub_cb_winleave = function()')
-emit('  -- mirrors scenario_winleave_open_float body: open a scratch float')
 emit('  local _b = api.nvim_create_buf(false, true)')
 emit('  pcall(api.nvim_open_win, _b, false, {')
 emit('    relative = "editor", row = 0, col = 0, width = 10, height = 5,')
 emit('  })')
 emit('end')
 emit('local _stub_cb_winclosed = function(args)')
-emit('  -- mirrors scenario_winclosed_reentrant_close body: close current win.')
 emit('  pcall(api.nvim_win_close, 0, true)')
-emit('  -- also drop a scratch buf if any remain, mirroring')
-emit('  -- scenario_winclosed_reentrant_buf_delete body (the dispatcher')
-emit('  -- has no way to know which WinClosed scenario this callback')
-emit('  -- came from since ser_arg records only the event name).')
 emit('  for _, b in ipairs(api.nvim_list_bufs()) do')
 emit('    if api.nvim_buf_is_valid(b) and not api.nvim_buf_is_loaded(b) then')
 emit('      pcall(api.nvim_buf_delete, b, { force = true, unload = true })')
@@ -139,7 +117,6 @@ emit('    end')
 emit('  end')
 emit('end')
 emit('local _stub_cb_winclosed_buf = function(args)')
-emit('  -- mirrors scenario_winclosed_reentrant_buf_delete specifically')
 emit('  for _, b in ipairs(api.nvim_list_bufs()) do')
 emit('    if api.nvim_buf_is_valid(b) and not api.nvim_buf_is_loaded(b) then')
 emit('      pcall(api.nvim_buf_delete, b, { force = true, unload = true })')
@@ -148,14 +125,12 @@ emit('    end')
 emit('  end')
 emit('end')
 emit('local _stub_cb_bufunload = function(args)')
-emit('  -- mirrors scenario_bufunload_reentrant_bufdelete')
 emit('  local _bs = api.nvim_list_bufs()')
 emit('  if #_bs >= 2 then')
 emit('    pcall(api.nvim_buf_delete, _bs[#_bs], { force = true })')
 emit('  end')
 emit('end')
 emit('local _stub_cb_on_lines = function()')
-emit('  -- mirrors scenario_on_lines_closes_win')
 emit('  pcall(api.nvim_win_close, 0, true)')
 emit('end')
 emit('')
@@ -200,9 +175,7 @@ end
 -- one window when there is only one in a tab triggers a different
 -- shutdown path that we want to defer to the final cleanup).
 emit('')
-emit('-- Per-round cleanup. Keeps current tab, discards the rest.')
 emit('local function teardown_round()')
-emit('  -- Close every non-current tab (and its windows).')
 emit('  local curtab = api.nvim_get_current_tabpage()')
 emit('  for _, t in ipairs(api.nvim_list_tabpages()) do')
 emit('    if t ~= curtab then')
@@ -212,12 +185,10 @@ emit('      end')
 emit('      pcall(api.nvim_tabpage_close, t, true)')
 emit('    end')
 emit('  end')
-emit('  -- Close floats tracked by open_float() in reverse creation order.')
 emit('  for i = #floats, 1, -1 do')
 emit('    pcall(api.nvim_win_close, floats[i], true)')
 emit('    floats[i] = nil')
 emit('  end')
-emit('  -- Delete scratch bufs (skip loaded ones; those need :bd, not :bw).')
 emit('  for _, b in ipairs(api.nvim_list_bufs()) do')
 emit('    if api.nvim_buf_is_valid(b) and not api.nvim_buf_is_loaded(b) then')
 emit('      pcall(api.nvim_buf_delete, b, { force = true })')
@@ -353,20 +324,10 @@ end
 
 -- Pre-round ops (round=0): emitted once before the round loop.
 if by_round[0] then
-  emit('-- pre-round ops (no round tag)')
   for _, op in ipairs(by_round[0]) do emit_op(op) end
 end
 
--- Per-round replay WITHOUT teardown between rounds. Source fuzzer
--- only calls teardown_floats/bufs/autocmds at round%50, so per-round
--- teardown would obliterate the accumulated state the crash depends
--- on (we observed rc=0 with eager teardown; rc=134 only with the
--- deferred teardown below).
 emit('')
-emit('-- Per-round replay blocks. Source fuzzer only calls')
-emit('-- teardown_floats/bufs/autocmds at round%50 (NEVER every round),')
-emit('-- so we mirror that: no teardown between rounds; the crash')
-emit('-- depends on state accumulated across all 21 captured rounds.')
 local last_round = 0
 for r = 1, max_round do
   if by_round[r] then
@@ -387,8 +348,6 @@ emit('')
 -- adding more open-float + win_close + buf_delete cycles increases
 -- the chance of hitting the UAF on standalone replay.
 if last_round > 0 then
-  emit('-- Extra replay of last captured round (mimics the rounds the')
-  emit('-- fuzzer never logged because ASAN aborted first).')
   for extra = 1, 3 do
     emit(string.format('do  -- extra round %d (round %d replayed)',
       extra, last_round))
@@ -399,16 +358,6 @@ if last_round > 0 then
   end
   emit('')
 end
-emit('-- Final teardown (mirrors teardown_floats/bufs/autocmds + redrawstatus')
-emit('-- at end of fuzz-crashhunter.lua main loop). The bug-trigger path lives in')
-emit('-- close_windows / do_buffer_ext; the captured ops stop short of')
-emit('-- the actual crashing op because ASAN aborts before round 22 is')
-emit('-- captured. We delete every scratch buf first (which calls')
-emit('-- close_windows on each one) then close remaining windows.')
-emit('-- Delete every unloaded scratch buf FIRST. This is what calls')
-emit('-- close_windows on each buf -> UAF on re-entry when WinClosed')
-emit('-- handler is wired. After bufs are deleted (and UAF detected)')
-emit('-- close the remaining float windows.')
 emit('for _, b in ipairs(api.nvim_list_bufs()) do')
 emit('  if api.nvim_buf_is_valid(b) and not api.nvim_buf_is_loaded(b) then')
 emit('    pcall(api.nvim_buf_delete, b, { force = true, unload = true })')
