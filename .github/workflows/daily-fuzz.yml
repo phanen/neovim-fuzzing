@@ -201,8 +201,14 @@ jobs:
             git add reports/
             if ! git diff --cached --quiet; then
               LATEST=$(ls -1 reports/ | sort | tail -1)
-              git commit -m "ci(daily-fuzz): persist report for $LATEST"
-              git push
+              REPORT="reports/$LATEST/report.json"
+              if [[ -f "$REPORT" ]]; then
+                git commit -m "ci(daily-fuzz): persist report for $LATEST"
+                git push
+              else
+                echo "no report.json in $LATEST (no AFL crashes); skipping commit"
+                git reset HEAD -- reports/ >/dev/null
+              fi
             else
               echo "no diff for reports/, skipping push"
             fi

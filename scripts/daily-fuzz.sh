@@ -327,6 +327,13 @@ write_json_report() {
     done
   fi
 
+  # No AFL crashes this run -> nothing to report. Skip writing report.json
+  # entirely so the CI commit step has nothing to persist and bails out.
+  if (( ${#repro_entries[@]} == 0 )); then
+    echo "no AFL crashes; skipping report.json"
+    return 0
+  fi
+
   # Hand off to bin/write-json-report.lua for the actual JSON assembly.
   # Bash side does the per-crash filesystem probe (kinds, sizes, rounds,
   # verify.err ASAN count); the Lua side handles git rev-parse, binary
@@ -354,8 +361,9 @@ write_json_report() {
 # disk under reports/<datetime>/.
 
 # Top-level: run the pipeline. Each helper does its own error
-# handling so a missing crash dir doesn't bail the whole run; we
-# always want a report written, even if the run produced no findings.
+# handling so a missing crash dir doesn't bail the whole run.
+# write_json_report skips writing report.json when AFL produced no
+# crashes -- the CI commit step then sees nothing to persist.
 main() {
   require_prereqs || return 1
   refresh_neovim   || return 1
