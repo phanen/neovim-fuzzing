@@ -296,6 +296,132 @@ local function pick_buf() return C.pick_buf(api, R) end
 local function pick_tab() return C.pick_tab(api, R) end
 
 ------------------------------------------------------------
+-- Varied callback factory
+--
+-- A scenario's autocmd callback fires whenever the event triggers;
+-- if the callback does the same thing every time, fuzz coverage
+-- collapses to one branch per scenario.  make_varied_cb() returns a
+-- thin dispatcher that round-robins through a behavior pool keyed
+-- by an invocation counter. Variants receive (args, n) where n is
+-- the 1-based counter, so a variant can adapt its parameters (e.g.
+-- float width = 5 + (n % 20)) to widen the parameter space each
+-- time the event re-fires.
+--
+-- counter * 31 (a prime) modulo N spreads the dispatch so two
+-- consecutive firings never pick the same variant twice.
+local function make_varied_cb(behaviors)
+  local counter = 0
+  return function(args)
+    counter = counter + 1
+    local idx = ((counter * 31) % #behaviors) + 1
+    local fn = behaviors[idx]
+    if fn then fn(args, counter) end
+  end
+end
+
+-- Shared behavior pools. Each pool is a list of `function(args, n)`
+-- closures captured over api / cmd / R / helpers. Scenarios choose
+-- which pool fits the event semantics; behaviors that try to mutate
+-- a window after WinClosed etc. rely on pcall at the call site.
+
+local CB_WINLEAVE = {
+  function(_args, n)  -- open float with parameters scaled by n
+    local b = api.nvim_create_buf(false, true)
+    pcall(api.nvim_open_win, b, false, {
+      relative = 'editor',
+      row = ((n % 5) - 2), col = ((n % 7) - 3),
+      width = ((n % 10) + 5), height = ((n % 4) + 3),
+    })
+  end,
+  function() pcall(api.nvim_win_close, 0, true) end,
+  function()
+    local bs = api.nvim_list_bufs()
+    if #bs > 1 then
+      pcall(api.nvim_buf_delete, bs[#bs], { force = true })
+    end
+  end,
+  function(_args, n)
+    pcall(api.nvim_buf_set_lines, 0, 0, 0, true,
+      { 'fzwl' .. tostring(n) })
+  end,
+  function() end,  -- explicit no-op, lets us exercise the event
+                   -- path without forced state churn
+  function() pcall(cmd, 'tabnew') end,
+  function()
+    pcall(api.nvim_exec_autocmds, 'User FzStub', {})
+  end,
+}
+
+local CB_WINCLOSED = {
+  function() pcall(api.nvim_win_close, 0, true) end,
+  function(_args, n)
+    local ws = api.nvim_list_wins()
+    if #ws > 1 then
+      pcall(api.nvim_win_close, ws[1 + (n % #ws)], true)
+    end
+  end,
+  function()  -- delete an unloaded buffer (the original bug)
+    for _, b in ipairs(api.nvim_list_bufs()) do
+      if api.nvim_buf_is_valid(b) and not api.nvim_buf_is_loaded(b) then
+        pcall(api.nvim_buf_delete, b, { force = true, unload = true })
+        return
+      end
+    end
+  end,
+  function() end,
+  function(_args, n)
+    pcall(api.nvim_buf_set_lines, 0, 0, 0, true,
+      { 'fzwc' .. tostring(n) })
+  end,
+  function() pcall(cmd, 'tabnew') end,
+}
+
+local CB_BUFUNLOAD = {
+  function()  -- delete the last (oldest) buffer (original bug)
+    local bs = api.nvim_list_bufs()
+    if #bs >= 2 then
+      pcall(api.nvim_buf_delete, bs[#bs], { force = true })
+    end
+  end,
+  function() pcall(api.nvim_win_close, 0, true) end,
+  function()  -- delete a specific other buffer
+    local bs = api.nvim_list_bufs()
+    if #bs >= 3 then
+      pcall(api.nvim_buf_delete, bs[#bs - 1], { force = true })
+    end
+  end,
+  function() end,
+  function(_args, n)
+    pcall(api.nvim_buf_set_lines, 0, 0, 0, true,
+      { 'fzbu' .. tostring(n) })
+  end,
+  function() pcall(cmd, 'tabnext') end,
+}
+
+local CB_ON_LINES = {
+  function() pcall(api.nvim_win_close, 0, true) end,
+  function()  -- open float (different shape from CB_WINLEAVE)
+    local b = api.nvim_create_buf(false, true)
+    pcall(api.nvim_open_win, b, false, {
+      relative = 'editor', row = 0, col = 0,
+      width = 12, height = 4,
+    })
+  end,
+  function(_args, n)  -- recursive set_lines (counted externally)
+    pcall(api.nvim_buf_set_lines, 0, 0, 0, true,
+      { 'fzol' .. tostring(n) })
+  end,
+  function() end,
+  function()
+    local bs = api.nvim_list_bufs()
+    if #bs > 1 then
+      pcall(api.nvim_buf_delete, bs[#bs], { force = true })
+    end
+  end,
+  function() pcall(cmd, 'tabnew') end,
+}
+
+------------------------------------------------------------
 -- State (tracked across rounds)
 ------------------------------------------------------------
 
@@ -452,14 +578,11 @@ local function op_tabnext() pcall(cmd, R.pick({ 'tabnext', 'tabprev', 'tabfirst'
 
 local function scenario_winleave_open_float()
   -- #31236: WinLeave callback opens a float; then a tab split
-  -- closes the tab and frees the float.
+  -- closes the tab and frees the float. Callback now uses the
+  -- shared WINLEAVE behavior pool so each replay fires a
+  -- different variant (open-float, close-win, delete-buf, ...).
   pcall(api.nvim_create_autocmd, 'WinLeave', {
-    callback = function()
-      local buf = api.nvim_create_buf(false, true)
-      pcall(api.nvim_open_win, buf, false, {
-        relative = 'editor', width = 10, height = 5, row = 0, col = 0,
-      })
-    end,
+    callback = make_varied_cb(CB_WINLEAVE),
   })
   local ts = list_tabs()
   if #ts >= 2 then
@@ -479,9 +602,7 @@ local function scenario_winclosed_reentrant_close()
   if not target then return end
   pcall(api.nvim_create_autocmd, 'WinClosed', {
     nested = true,
-    callback = function(args)
-      pcall(api.nvim_win_close, 0, true)
-    end,
+    callback = make_varied_cb(CB_WINCLOSED),
   })
   pcall(api.nvim_win_close, target, true)
   safe(cmd, 'redrawstatus')
@@ -495,9 +616,7 @@ local function scenario_winclosed_reentrant_buf_delete()
   if not target_win then return end
   pcall(api.nvim_create_autocmd, 'WinClosed', {
     nested = true,
-    callback = function()
-      pcall(api.nvim_buf_delete, target_buf, { force = true })
-    end,
+    callback = make_varied_cb(CB_WINCLOSED),
   })
   pcall(api.nvim_win_close, target_win, true)
   safe(cmd, 'redrawstatus')
@@ -511,9 +630,7 @@ local function scenario_bufunload_reentrant_bufdelete()
   if not target_a or not target_b or target_a == target_b then return end
   pcall(api.nvim_create_autocmd, 'BufUnload', {
     nested = true,
-    callback = function()
-      pcall(api.nvim_buf_delete, target_b, { force = true })
-    end,
+    callback = make_varied_cb(CB_BUFUNLOAD),
   })
   pcall(api.nvim_buf_delete, target_a, { force = true })
   safe(cmd, 'redrawstatus')
@@ -524,10 +641,320 @@ local function scenario_on_lines_closes_win()
   local target = pick_buf()
   if not target then return end
   local ok = pcall(api.nvim_buf_attach, target, false, {
-    on_lines = function() pcall(api.nvim_win_close, 0, true) end,
+    on_lines = make_varied_cb(CB_ON_LINES),
   })
   if not ok then return end
   pcall(api.nvim_buf_set_lines, target, 0, 0, true, { 'x' })
+  safe(cmd, 'redrawstatus')
+end
+
+------------------------------------------------------------
+-- Pattern 1.5: new scenarios borrowed from neovim test/functional/api
+--
+-- Sources (file:line):
+--   window_spec.lua:1949-1955  -- WinNewPre delete target buf UAF
+--   extmark_spec.lua:1883-1948 + vim_spec:nvim_set_decoration_provider
+--                                -- provider on_buf/on_line chain
+--   buffer_updates_spec.lua:127-232 -- on_lines recursive set_lines
+--   vim_spec.lua:4502-4746  -- statuscolumn eval string side-effects
+--   vim_spec.lua:4294-4500  -- nvim_open_term on_input callback
+------------------------------------------------------------
+
+local function scenario_winnew_delete_target_buf()
+  -- WinNewPre callback deletes the would-be buffer before the new
+  -- window finishes initializing. Mirrors window_spec.lua:1949-1955
+  -- "no heap-use-after-free if target buffer deleted by autocommands".
+  local target_buf = pick_buf()
+  if not target_buf then return end
+  pcall(api.nvim_create_autocmd, 'WinNew', {
+    callback = function()
+      pcall(api.nvim_buf_delete, target_buf, { force = true })
+    end,
+  })
+  -- Trigger by opening a new split; WinNew fires inside nvim's
+  -- window initialization, which is the same call path the original
+  -- crash lived on.
+  pcall(cmd, R.chance(1, 2) and 'split' or 'vsplit')
+  safe(cmd, 'redrawstatus')
+end
+
+local function scenario_decoration_provider_chain()
+  -- nvim_set_decoration_provider with on_buf and on_line callbacks
+  -- that re-enter the API to mutate extmarks. The provider runs
+  -- deep inside neovim's redraw pipeline; calling set_extmark from
+  -- there has been a recurring UAF source.
+  local ns = api.nvim_create_namespace('fzc' .. rand_word(6))
+  S.namespaces[#S.namespaces + 1] = ns
+  cap(S.namespaces, 16)
+  pcall(api.nvim_set_decoration_provider, ns, {
+    on_buf = function(_, b, tick)
+      pcall(api.nvim_buf_set_extmark, b, ns, 0, 0, {
+        ephemeral = true,
+        virt_text = { { rand_printable(R.num(0, 6)), 'Comment' } },
+      })
+      return tick
+    end,
+    on_line = function(_, _w, b, row)
+      pcall(api.nvim_buf_set_extmark, b, ns, row, 0, {
+        ephemeral = true, sign_text = rand_word(1),
+      })
+    end,
+  })
+  -- Force the provider to run by editing the buffer
+  local tb = pick_buf()
+  if tb then
+    pcall(api.nvim_buf_set_lines, tb,
+      R.num(-1, 30), R.num(-1, 30), false,
+      { rand_printable(R.num(0, 6)) })
+  end
+  safe(cmd, 'redrawstatus')
+end
+
+local function scenario_buf_attach_recursive_lines()
+  -- nvim_buf_attach on_lines callback that recursively mutates the
+  -- buffer. The on_lines callback runs during text-change commit; a
+  -- callback that calls nvim_buf_set_lines back into the same buffer
+  -- has historically been a state-machine crash site
+  -- (buffer_updates_spec.lua:127-232).
+  local target = pick_buf()
+  if not target then return end
+  local fired = 0
+  local ok = pcall(api.nvim_buf_attach, target, false, {
+    on_lines = function(_, b, _changedtick, _first, _last, _ll, _bc)
+      fired = fired + 1
+      if fired > 4 then return end
+      pcall(api.nvim_buf_set_lines, b, fired, fired, false,
+        { rand_printable(R.num(0, 4)) })
+    end,
+    on_detach = function() end,
+  })
+  if not ok then return end
+  -- Initial mutation: the outer on_lines fires for this set_lines.
+  pcall(api.nvim_buf_set_lines, target, 0, 0, true,
+    { rand_printable(R.num(0, 6)) })
+  safe(cmd, 'redrawstatus')
+end
+
+local function scenario_statuscolumn_eval_complex()
+  -- statuscolumn set to an expression containing %{} that re-evaluates
+  -- per redraw, combined with sign_text + ui_watched extmark to force
+  -- re-evaluation. statuscolumn eval historically called user-supplied
+  -- Vim expressions during redraw; bad inputs have crashed the redraw
+  -- path (vim_spec.lua:4502-4746 eval_statusline).
+  local b = pick_buf()
+  if not b then return end
+  pcall(api.nvim_set_option_value, 'statuscolumn', R.pick({
+    '%{""}',
+    '%{%}',
+    '%c%v',
+    '%{mode()}',
+    '%{"" .. ""}',
+    '%{%{%{""}%}%}',
+    '%{toupper("fz")}',
+  }), {})
+  local ns = api.nvim_create_namespace('fzc' .. rand_word(6))
+  pcall(api.nvim_buf_set_extmark, b, ns, 0, 0, {
+    sign_text = rand_word(1),
+    ui_watched = true,
+  })
+  safe(cmd, 'redrawstatus')
+end
+
+local function scenario_open_term_on_input()
+  -- nvim_open_term with on_input callback that re-enters the API to
+  -- mutate the buffer. on_input fires from inside the terminal input
+  -- path; set_lines from there has triggered stack/ordering issues
+  -- historically (vim_spec.lua:4294-4500).
+  local bs = list_bufs()
+  if #bs == 0 then return end
+  local b = R.pick(bs)
+  local ok, ch = pcall(api.nvim_open_term, b, {
+    on_input = function(_, _term, _buf, _data)
+      pcall(api.nvim_buf_set_lines, _buf, 0, -1, false, { 'fzot' })
+    end,
+  })
+  if not ok or not ch then return end
+  -- Send mixed payload: raw bytes, ANSI, control chars, printable.
+  local payload = {}
+  for _ = 1, R.num(4, 64) do
+    local k = R.one_of_n(4)
+    if k == 0 then
+      payload[#payload + 1] = string.char(R.u8() % 128)
+    elseif k == 1 then
+      payload[#payload + 1] = string.char(R.num(1, 31))
+    elseif k == 2 then
+      payload[#payload + 1] = '\27[' .. R.num(0, 999) .. 'm'
+    else
+      payload[#payload + 1] = rand_printable(R.num(0, 8))
+    end
+  end
+  pcall(api.nvim_chan_send, ch, table.concat(payload))
+end
+
+------------------------------------------------------------
+-- Pattern 1.6: second wave, sources from neovim test/functional/api
+--
+-- Sources (file:line):
+--   tabpage_spec.lua:319-334   -- nested nvim_open_tabpage inside TabNew
+--   autocmd_spec.lua:1577-1605 -- 4 callbacks on same event, ordering
+--   buffer_updates_spec.lua:488-511 -- attach/detach cycling on one buf
+--   extmark_spec.lua + vim_spec:nvim_set_decoration_provider
+--                                -- all 6 hooks installed at once
+------------------------------------------------------------
+
+-- Behavior pool for TabNew-family events (re-entry from inside the
+-- tabpage-creation lifecycle). Uses varied_cb in scenario so each
+-- replay cycles through different side-effects.
+local CB_TABNEW = {
+  function()  -- nested nvim_open_tabpage (the original bug class)
+    local b = api.nvim_create_buf(false, true)
+    pcall(api.nvim_open_tabpage, b, false, {})
+  end,
+  function()  -- close current tab
+    if #api.nvim_list_tabpages() > 1 then
+      pcall(api.nvim_command, 'tabclose')
+    end
+  end,
+  function()  -- open a small float
+    local b = api.nvim_create_buf(false, true)
+    pcall(api.nvim_open_win, b, false, {
+      relative = 'editor', row = 0, col = 0, width = 8, height = 4,
+    })
+  end,
+  function() end,
+  function(_args, n)
+    pcall(api.nvim_buf_set_lines, 0, 0, 0, true,
+      { 'fztn' .. tostring(n) })
+  end,
+  function()
+    pcall(api.nvim_exec_autocmds, 'User FzStub', {})
+  end,
+}
+
+local function scenario_tabnew_nested_open_tabpage()
+  -- TabNew callback that opens another tabpage. The nested
+  -- nvim_open_tabpage fires its own TabNew while the outer one
+  -- is mid-callback, exercising the re-entry guard and tabpage
+  -- lifecycle ordering (tabpage_spec.lua:319-334 "handles nasty
+  -- autocmds").
+  pcall(api.nvim_create_autocmd, 'TabNew', {
+    callback = make_varied_cb(CB_TABNEW),
+  })
+  pcall(cmd, 'tabnew')
+  safe(cmd, 'redrawstatus')
+end
+
+local function scenario_multi_callback_same_event()
+  -- Install multiple distinct callbacks on the same User event
+  -- and fire them all at once. Each callback mutates a different
+  -- resource (buf lines, cursor, new float, delete buf), forcing
+  -- the autocmd dispatcher to chain state changes that re-enter
+  -- the API in interleaved order
+  -- (autocmd_spec.lua:1577-1605 "calls multiple lua callbacks").
+  local function cb_set_lines()
+    pcall(api.nvim_buf_set_lines, 0, 0, 0, true, { 'mcb1' })
+  end
+  local function cb_set_cursor()
+    pcall(api.nvim_win_set_cursor, 0, { 1, 0 })
+  end
+  local function cb_open_float()
+    local b = api.nvim_create_buf(false, true)
+    pcall(api.nvim_open_win, b, false, {
+      relative = 'editor', row = 0, col = 0, width = 5, height = 3,
+    })
+  end
+  local function cb_delete_buf()
+    local bs = api.nvim_list_bufs()
+    if #bs > 1 then
+      pcall(api.nvim_buf_delete, bs[#bs], { force = true })
+    end
+  end
+  local pool = { cb_set_lines, cb_set_cursor, cb_open_float, cb_delete_buf }
+  -- Randomize subset count and ordering so each replay covers a
+  -- different fan-out width.
+  local n = R.num(2, #pool)
+  for _ = 1, n do
+    local idx = R.one_of_n(#pool) + 1
+    pcall(api.nvim_create_autocmd, 'User FzMcb',
+      { callback = pool[idx] })
+    table.remove(pool, idx)
+  end
+  -- Fire all installed callbacks via a single synthetic event.
+  pcall(api.nvim_exec_autocmds, 'User FzMcb', {})
+  safe(cmd, 'redrawstatus')
+end
+
+local function scenario_attach_detach_cycle()
+  -- Attach and detach rapidly on the same buffer. on_lines
+  -- notifications depend on per-channel state inside nvim;
+  -- repeated cycles reveal race-style state-machine bugs
+  -- (buffer_updates_spec.lua:488-511 "does not get confused if
+  -- enabled/disabled many times").
+  local target = pick_buf()
+  if not target then return end
+  local cycles = R.num(2, 6)
+  for _ = 1, cycles do
+    local ok = pcall(api.nvim_buf_attach, target, false, {
+      on_lines = function() end,
+      on_detach = function() end,
+    })
+    if not ok then break end
+    pcall(api.nvim_buf_detach, target)
+  end
+  -- A final attach + mutate; the on_lines should fire exactly
+  -- once if the cycling cleared internal state correctly.
+  local ok = pcall(api.nvim_buf_attach, target, false, {
+    on_lines = function(_, b)
+      -- Recursive-but-bounded: only mutate once.
+      pcall(api.nvim_buf_set_lines, b, -1, -1, false,
+        { rand_printable(R.num(0, 4)) })
+    end,
+  })
+  if ok then
+    pcall(api.nvim_buf_set_lines, target, 0, 0, true,
+      { rand_printable(R.num(0, 6)) })
+  end
+  safe(cmd, 'redrawstatus')
+end
+
+local function scenario_decoration_provider_full_hooks()
+  -- nvim_set_decoration_provider with ALL six hooks installed at
+  -- once (on_start, on_buf, on_win, on_line, on_range, on_end).
+  -- Each hook re-enters the API to mutate extmarks from inside
+  -- the redraw pipeline, the broadest reentrancy shape covered
+  -- by neovim's extmark tests.
+  local ns = api.nvim_create_namespace('fzc' .. rand_word(6))
+  S.namespaces[#S.namespaces + 1] = ns
+  cap(S.namespaces, 16)
+  pcall(api.nvim_set_decoration_provider, ns, {
+    on_start = function() return true end,
+    on_buf = function(_, b, tick)
+      pcall(api.nvim_buf_set_extmark, b, ns, 0, 0, {
+        ephemeral = true,
+        virt_text = { { rand_printable(R.num(0, 4)), 'Normal' } },
+      })
+      return tick
+    end,
+    on_win = function() return true end,
+    on_line = function(_, _w, b, row)
+      pcall(api.nvim_buf_set_extmark, b, ns, row, 0, {
+        ephemeral = true, sign_text = rand_word(1),
+      })
+    end,
+    on_range = function(_, _w, b, br, bc, er, ec)
+      pcall(api.nvim_buf_set_extmark, b, ns, br, bc, {
+        ephemeral = true,
+        end_row = er, end_col = ec,
+        hl_group = R.pick({ 'Error', 'Comment', 'Search' }),
+      })
+    end,
+    on_end = function() end,
+  })
+  local b = pick_buf()
+  if b then
+    pcall(api.nvim_buf_set_lines, b, 0, 0, true,
+      { rand_printable(R.num(0, 6)) })
+  end
   safe(cmd, 'redrawstatus')
 end
 
@@ -743,6 +1170,18 @@ local OPS = {
   { w =  8, name = 'scn_winclosed_reentrant_bufdel',fn = scenario_winclosed_reentrant_buf_delete },
   { w = 10, name = 'scn_bufunload_reentrant_del',   fn = scenario_bufunload_reentrant_bufdelete },
   { w =  8, name = 'scn_on_lines_closes_win',       fn = scenario_on_lines_closes_win },
+  -- Pattern 1.5: borrowed from neovim test/functional/api
+  { w =  7, name = 'scn_winnew_delete_target',       fn = scenario_winnew_delete_target_buf },
+  { w =  6, name = 'scn_deco_provider_chain',        fn = scenario_decoration_provider_chain },
+  { w =  6, name = 'scn_buf_attach_recursive',       fn = scenario_buf_attach_recursive_lines },
+  { w =  6, name = 'scn_statuscol_eval_complex',     fn = scenario_statuscolumn_eval_complex },
+  { w =  6, name = 'scn_open_term_on_input',         fn = scenario_open_term_on_input },
+  -- Pattern 1.6: second wave (nested tab, multi-cb, attach/detach cycle,
+  -- full decoration provider hooks)
+  { w =  6, name = 'scn_tabnew_nested',              fn = scenario_tabnew_nested_open_tabpage },
+  { w =  5, name = 'scn_multi_cb_same_event',        fn = scenario_multi_callback_same_event },
+  { w =  5, name = 'scn_attach_detach_cycle',        fn = scenario_attach_detach_cycle },
+  { w =  5, name = 'scn_deco_provider_full',         fn = scenario_decoration_provider_full_hooks },
   -- Pattern 2: last-tab + float
   { w =  9, name = 'scn_last_tab_float_close',      fn = scenario_last_tab_float_close },
   { w =  8, name = 'scn_bdelete_float_other_tab',   fn = scenario_bdelete_with_float_in_other_tab },
@@ -812,17 +1251,32 @@ for round = 1, ROUNDS do
     safe(op.fn)
     if LOG_TARGET then log_dispatch({ kind = 'op', round = round, name = op.name }) end
   else
-    -- 40% of rounds: pure scenario weight from the high-density
-    -- patterns, picked directly with no PRNG dispatch:
-    if R.chance(1, 3) then
+    -- 40% of rounds: weighted dispatch across the high-density bug
+    -- patterns. Each candidate gets its own chance roll so a
+    -- single seed's PRNG can't starve half of them. New patterns
+    -- (Pattern 1.5/1.6) get the same chance as the original 3 so
+    -- they actually fire over a session of any length.
+    if R.chance(1, 5) then
       safe(scenario_winleave_open_float)
       if LOG_TARGET then log_dispatch({ kind = 'scenario', round = round, name = 'scn_winleave_open_float' }) end
-    elseif R.chance(1, 3) then
+    elseif R.chance(1, 5) then
       safe(scenario_last_tab_float_close)
       if LOG_TARGET then log_dispatch({ kind = 'scenario', round = round, name = 'scn_last_tab_float_close' }) end
-    elseif R.chance(1, 2) then
+    elseif R.chance(1, 5) then
       safe(scenario_extmark_set_then_buf_set_lines)
       if LOG_TARGET then log_dispatch({ kind = 'scenario', round = round, name = 'scn_extmark_buf_set_lines' }) end
+    elseif R.chance(1, 5) then
+      safe(scenario_winnew_delete_target_buf)
+      if LOG_TARGET then log_dispatch({ kind = 'scenario', round = round, name = 'scn_winnew_delete_target' }) end
+    elseif R.chance(1, 5) then
+      safe(scenario_decoration_provider_chain)
+      if LOG_TARGET then log_dispatch({ kind = 'scenario', round = round, name = 'scn_deco_provider_chain' }) end
+    elseif R.chance(1, 5) then
+      safe(scenario_buf_attach_recursive_lines)
+      if LOG_TARGET then log_dispatch({ kind = 'scenario', round = round, name = 'scn_buf_attach_recursive' }) end
+    elseif R.chance(1, 5) then
+      safe(scenario_tabnew_nested_open_tabpage)
+      if LOG_TARGET then log_dispatch({ kind = 'scenario', round = round, name = 'scn_tabnew_nested' }) end
     end
   end
   if R.chance(1, 6) then
