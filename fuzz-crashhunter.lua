@@ -984,6 +984,128 @@ local function scenario_decoration_provider_full_hooks()
 end
 
 ------------------------------------------------------------
+-- Pattern 1.7: third wave, sourced beyond test/functional/api/
+--
+-- Sources (file:line):
+--   lua/buffer_updates_spec.lua:1776-1892 -- on_detach chain + reuse
+--   terminal/channel_spec.lua:209-230      -- TermClose + bwipe race
+--   ex_cmds/quickfix_commands_spec.lua:196 -- QuickFixCmdPost nested cclose
+--   vimscript/errorlist_spec.lua:77-82     -- WinLeave -> nvim_win_close
+--   autocmd/dirchanged_spec.lua:93         -- DirChanged nested
+--   editor/langmap_spec.lua:64-201         -- langmap + insert keymap
+------------------------------------------------------------
+
+local function scenario_buf_attach_ondetach_chain()
+  -- nvim_buf_attach + on_detach that re-attaches same buffer,
+  -- exercising the free_buffer_stuff -> on_detach cycle.
+  -- (lua/buffer_updates_spec.lua:1776-1892 "called before buf_freeall
+  -- autocommands"; "buf 1 reused via edit asdf")
+  local target = pick_buf()
+  if not target then return end
+  local depth = 0
+  local ok = pcall(api.nvim_buf_attach, target, false, {
+    on_lines = function() end,
+    on_detach = function()
+      depth = depth + 1
+      if depth > 2 then return end
+      pcall(api.nvim_buf_attach, target, false, {
+        on_lines = function() end,
+        on_detach = function() end,
+      })
+    end,
+  })
+  if not ok then return end
+  -- Reuse the buffer via :edit so the existing one is wiped and a
+  -- fresh attachment cycle kicks in.
+  pcall(api.nvim_buf_set_name, target, '/tmp/fz_detach_' .. rand_word(4) .. '.txt')
+  pcall(cmd, 'edit')
+  safe(cmd, 'redrawstatus')
+end
+
+local function scenario_termclose_bwipe_chanclose()
+  -- TermClose callback bwipes the buffer and writes to the channel
+  -- in the same fast event, racing the chan-close path.
+  -- (terminal/channel_spec.lua:209-230 "bwipe during TermClose")
+  local b = pick_buf()
+  if not b then return end
+  local ok, ch = pcall(api.nvim_open_term, b, {})
+  if not ok or not ch then return end
+  pcall(api.nvim_create_autocmd, 'TermClose', {
+    nested = true,
+    callback = function()
+      pcall(api.nvim_buf_delete, b, { force = true })
+      pcall(api.nvim_chan_send, ch, '\x03')
+    end,
+  })
+  pcall(api.nvim_chan_send, ch, 'exit\r')
+  safe(cmd, 'redrawstatus')
+end
+
+local function scenario_quickfix_nested_autocmd()
+  -- QuickFixCmdPost with nested cclose | cwindow under ++nested.
+  -- (ex_cmds/quickfix_commands_spec.lua:196)
+  pcall(api.nvim_create_autocmd, 'QuickFixCmdPost', {
+    nested = true,
+    callback = function()
+      pcall(cmd, 'cclose')
+      pcall(cmd, 'cwindow')
+    end,
+  })
+  pcall(api.nvim_buf_set_lines, 0, 0, -1, false, {
+    'foo bar', 'baz foo', 'qux bar', 'extra line',
+  })
+  pcall(cmd, 'vimgrep /foo/ %')
+  safe(cmd, 'redrawstatus')
+end
+
+local function scenario_winleave_nested_win_close()
+  -- WinLeave autocmd that closes the current window in the callback,
+  -- causing re-entry through the win-leave path.
+  -- (vimscript/errorlist_spec.lua:77-82)
+  local target = pick_win()
+  if not target then return end
+  pcall(api.nvim_create_autocmd, 'WinLeave', {
+    nested = true,
+    callback = function()
+      pcall(api.nvim_win_close, 0, true)
+    end,
+  })
+  pcall(api.nvim_win_close, target, true)
+  safe(cmd, 'redrawstatus')
+end
+
+local function scenario_dirchange_nested()
+  -- DirChanged autocmd attempts another :cd inside the callback,
+  -- which neovim normally rejects but the nested path still walks
+  -- the autotree.
+  -- (autocmd/dirchanged_spec.lua:93)
+  pcall(api.nvim_create_autocmd, 'DirChanged', {
+    nested = true,
+    callback = function()
+      pcall(cmd, 'cd /tmp')
+    end,
+  })
+  pcall(cmd, 'cd /')
+  safe(cmd, 'redrawstatus')
+end
+
+local function scenario_langmap_with_input_chain()
+  -- langmap set + insert-mode mapping that calls a nvim API to
+  -- mutate the buffer, then fed via nvim_input. langmap reverse-
+  -- mapping interferes with the keymap lookup.
+  -- (editor/langmap_spec.lua:64-201)
+  pcall(cmd, 'set langmap=xX,Xx,yY,Yy')
+  local rhs = ':lua vim.api.nvim_buf_set_lines(0, 0, 0, true, {"fzlm"})<CR>'
+  local opts = { noremap = true, silent = true }
+  local ok = pcall(api.nvim_buf_set_keymap, 0, 'i', '<F2>', rhs, opts)
+  if not ok then
+    pcall(api.nvim_set_keymap, 'i', '<F2>', rhs, opts)
+  end
+  pcall(api.nvim_input, '<F2>')
+  safe(cmd, 'redrawstatus')
+end
+
+------------------------------------------------------------
 -- Pattern 2: last-tab + float boundary
 ------------------------------------------------------------
 
@@ -1207,6 +1329,14 @@ local OPS = {
   { w =  5, name = 'scn_multi_cb_same_event',        fn = scenario_multi_callback_same_event },
   { w =  5, name = 'scn_attach_detach_cycle',        fn = scenario_attach_detach_cycle },
   { w =  5, name = 'scn_deco_provider_full',         fn = scenario_decoration_provider_full_hooks },
+  -- Pattern 1.7: third wave (on_detach chain, termclose bwipe, quickfix
+  -- nested, winleave nested close, dirchange nested, langmap + input)
+  { w =  7, name = 'scn_buf_attach_ondetach',        fn = scenario_buf_attach_ondetach_chain },
+  { w =  7, name = 'scn_termclose_bwipe',            fn = scenario_termclose_bwipe_chanclose },
+  { w =  6, name = 'scn_quickfix_nested',            fn = scenario_quickfix_nested_autocmd },
+  { w =  7, name = 'scn_winleave_nested_close',      fn = scenario_winleave_nested_win_close },
+  { w =  6, name = 'scn_dirchange_nested',           fn = scenario_dirchange_nested },
+  { w =  6, name = 'scn_langmap_input_chain',        fn = scenario_langmap_with_input_chain },
   -- Pattern 2: last-tab + float
   { w =  9, name = 'scn_last_tab_float_close',      fn = scenario_last_tab_float_close },
   { w =  8, name = 'scn_bdelete_float_other_tab',   fn = scenario_bdelete_with_float_in_other_tab },
