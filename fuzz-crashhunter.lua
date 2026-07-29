@@ -78,6 +78,19 @@ local LOG_TARGET = nil
 -- for every captured op).
 local CURRENT_ROUND = 0
 
+-- Per-round ops cap (env FUZZ_ROUND_OPS_CAP). When the api/cmd proxy
+-- sees more than this many calls in the current round, it stops
+-- forwarding to vim.api/vim.cmd for the remainder of the round. This
+-- is a safety net for capture mode: a scenario can land nvim in a
+-- native-call dead state (no Lua-level pcall rescue), which otherwise
+-- hangs repro-from-crash.sh until the bash `timeout` kills nvim and
+-- the captured log is truncated mid-round.
+--
+-- 0 = disabled (default). repro-from-crash.sh sets a value to bound
+-- the worst case.
+local _round_ops = 0
+local FUZZ_ROUND_OPS_CAP = tonumber(os.getenv('FUZZ_ROUND_OPS_CAP')) or 0
+
 local function log_dispatch(entry)
   if LOG_TARGET then
     LOG_TARGET.ops[#LOG_TARGET.ops + 1] = entry
@@ -183,6 +196,10 @@ local function make_api_logger()
     local v = rawget(orig_api, k) or orig_api[k]
     if type(v) == 'function' then
       return function(...)
+        if FUZZ_ROUND_OPS_CAP > 0 then
+          _round_ops = _round_ops + 1
+          if _round_ops > FUZZ_ROUND_OPS_CAP then return nil end
+        end
         if LOG_TARGET then
           local n = select('#', ...)
           local args = { ... }
@@ -217,6 +234,10 @@ local function make_cmd_logger()
     local v = rawget(orig_cmd, k) or orig_cmd[k]
     if type(v) == 'function' then
       return function(...)
+        if FUZZ_ROUND_OPS_CAP > 0 then
+          _round_ops = _round_ops + 1
+          if _round_ops > FUZZ_ROUND_OPS_CAP then return nil end
+        end
         if LOG_TARGET then
           local args = { ... }
           LOG_TARGET.fh:write(string.format(
@@ -232,6 +253,10 @@ local function make_cmd_logger()
     return v
   end, __call = function(_, ...)
     -- vim.cmd(...) with no method name: command string invocation
+    if FUZZ_ROUND_OPS_CAP > 0 then
+      _round_ops = _round_ops + 1
+      if _round_ops > FUZZ_ROUND_OPS_CAP then return nil end
+    end
     if LOG_TARGET then
       local args = { ... }
       LOG_TARGET.fh:write(string.format(
@@ -1244,6 +1269,7 @@ end
 
 for round = 1, ROUNDS do
   CURRENT_ROUND = round
+  _round_ops = 0
   -- High-level scenario plays first so autocmd / state is set up
   -- before individual ops mutate it.
   if R.chance(2, 5) then

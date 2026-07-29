@@ -48,7 +48,8 @@ echo
 
 ROUNDS="${REPRO_CAPTURE_ROUNDS:-25}" FUZZ_QUIET=1 VIMRUNTIME="$ROOT/deps/neovim/runtime" \
   ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1" \
-    timeout 60 "$ROOT/deps/neovim/build-afl/bin/nvim" --headless --clean -i NONE -n \
+  FUZZ_ROUND_OPS_CAP="${REPRO_ROUND_OPS_CAP:-500}" \
+    timeout "${REPRO_CAPTURE_TIMEOUT:-300}" "$ROOT/deps/neovim/build-afl/bin/nvim" --headless --clean -i NONE -n \
       -l "$ROOT/fuzz-crashhunter.lua" "$abs_crash" "${REPRO_CAPTURE_ROUNDS:-25}" \
       "log=$log_path" \
       2>/tmp/repro-from-crash/run.err || true
