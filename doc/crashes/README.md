@@ -9,12 +9,14 @@ path under AFL without rediscovering it from scratch.
 
 ```
 README.md                         this file
+00-summary.md                     one-page cheat sheet (top patterns)
 01-top-crashes-table.md           issue-numbered index, fastest scannable
 02-crash-by-subsystem.md          crash families grouped by API area
 03-asan-error-patterns.md         ASAN error classes + what provokes them
 04-autocmd-reentrancy.md          use-after-free from autocmd callbacks
 05-extmark-state-machine.md       extmark / signcolumn / decoration sync
 06-async-resource-lifetime.md    libuv, libvterm, RPC stack-corruption
+07-newer-patterns.md              patterns 6-11 from neovim functional tests
 ```
 
 ## Reading order

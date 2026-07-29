@@ -250,4 +250,368 @@ function M.teardown_autocmds(api, auids, augroups)
   end
 end
 
+------------------------------------------------------------
+-- Weighted dispatch
+--
+-- t is a list of {w=number, name=string, fn=function} records
+-- (or {w=..., name=..., fn=...} for traps). pick_weighted returns
+-- one element with probability proportional to w. R is the
+-- fuzz-common PRNG. Total weight is computed on the fly; we
+-- cache it in the table for repeated calls on the same t.
+------------------------------------------------------------
+
+function M.total_weight(t)
+  if not t._total then
+    local s = 0
+    for i = 1, #t do s = s + t[i].w end
+    t._total = s
+  end
+  return t._total
+end
+
+function M.pick_weighted(t, R, mix)
+  local total = M.total_weight(t)
+  -- mix is an optional integer (typically the round counter).
+  -- Without it, R.u32() % total gives at most (#bytes/4) distinct
+  -- values per seed; AFL iterates over many seeds so coverage
+  -- improves across runs, but a single 200-round standalone
+  -- execution only hits 3-4 ops. XORing the round counter into
+  -- the u32 breaks the cycle, giving each round a fresh pick.
+  local r
+  if mix then
+    r = bit.bxor(R.u32(), mix * 0x9E3779B9) % total
+  else
+    r = R.u32() % total
+  end
+  for i = 1, #t do
+    r = r - t[i].w
+    if r < 0 then return t[i] end
+  end
+  return t[#t]
+end
+
+function M.reset_weight_cache(t) t._total = nil end
+
+------------------------------------------------------------
+-- Varied-callback factory
+--
+-- An autocmd callback that does the same thing every firing
+-- collapses fuzzer coverage to one branch per scenario.  This
+-- returns a thin dispatcher that round-robins through a pool
+-- of behaviors, keyed by an invocation counter.  Variants
+-- receive (args, n) where n is the 1-based counter, so a
+-- variant can adapt its parameters (e.g. float width =
+-- 5 + (n % 20)) to widen the parameter space each time the
+-- event re-fires.
+--
+-- counter * 31 (a prime) modulo N spreads the dispatch so two
+-- consecutive firings never pick the same variant twice.
+------------------------------------------------------------
+
+function M.make_varied_cb(behaviors)
+  local counter = 0
+  return function(args)
+    counter = counter + 1
+    local idx = ((counter * 31) % #behaviors) + 1
+    local fn = behaviors[idx]
+    if fn then fn(args, counter) end
+  end
+end
+
+------------------------------------------------------------
+-- Standard behavior pools
+--
+-- Each pool is a list of `function(args, n)` closures that
+-- mutate nvim state in different ways.  Pools are defined
+-- here (not at module load) so they can capture per-fuzzer
+-- helpers (api/cmd/R/...) at install time.  Pass the fuzzer's
+-- context in; the returned pools close over it.
+--
+-- Pools follow a single shape: an array of behavior fns.
+-- Scenarios choose the pool that fits the event semantics.
+-- Behaviors that may target already-freed state rely on pcall
+-- at the call site.
+------------------------------------------------------------
+
+function M.behavior_pools(ctx)
+  local api, cmd, R, pick_buf, rand_printable, rand_word = ctx.api, ctx.cmd, ctx.R,
+    ctx.pick_buf, ctx.rand_printable, ctx.rand_word
+
+  local CB_WINLEAVE = {
+    function(_args, n)  -- open float with parameters scaled by n
+      local b = api.nvim_create_buf(false, true)
+      pcall(api.nvim_open_win, b, false, {
+        relative = 'editor',
+        row = ((n % 5) - 2), col = ((n % 7) - 3),
+        width = ((n % 10) + 5), height = ((n % 4) + 3),
+      })
+    end,
+    function() pcall(api.nvim_win_close, 0, true) end,
+    function()
+      local bs = api.nvim_list_bufs()
+      if #bs > 1 then
+        pcall(api.nvim_buf_delete, bs[#bs], { force = true })
+      end
+    end,
+    function(_args, n)
+      pcall(api.nvim_buf_set_lines, 0, 0, 0, true, { 'fzwl' .. tostring(n) })
+    end,
+    function() end,  -- explicit no-op, lets us exercise the event path
+    function() pcall(cmd, 'tabnew') end,
+    function() pcall(api.nvim_exec_autocmds, 'User FzStub', {}) end,
+  }
+
+  local CB_WINCLOSED = {
+    function() pcall(api.nvim_win_close, 0, true) end,
+    function(_args, n)
+      local ws = api.nvim_list_wins()
+      if #ws > 1 then
+        pcall(api.nvim_win_close, ws[1 + (n % #ws)], true)
+      end
+    end,
+    function()  -- delete an unloaded buffer (the original bug)
+      for _, b in ipairs(api.nvim_list_bufs()) do
+        if api.nvim_buf_is_valid(b) and not api.nvim_buf_is_loaded(b) then
+          pcall(api.nvim_buf_delete, b, { force = true, unload = true })
+          return
+        end
+      end
+    end,
+    function() end,
+    function(_args, n)
+      pcall(api.nvim_buf_set_lines, 0, 0, 0, true, { 'fzwc' .. tostring(n) })
+    end,
+    function() pcall(cmd, 'tabnew') end,
+  }
+
+  local CB_BUFUNLOAD = {
+    function()  -- delete the last (oldest) buffer (original bug)
+      local bs = api.nvim_list_bufs()
+      if #bs >= 2 then
+        pcall(api.nvim_buf_delete, bs[#bs], { force = true })
+      end
+    end,
+    function() pcall(api.nvim_win_close, 0, true) end,
+    function()  -- delete a specific other buffer
+      local bs = api.nvim_list_bufs()
+      if #bs >= 3 then
+        pcall(api.nvim_buf_delete, bs[#bs - 1], { force = true })
+      end
+    end,
+    function() end,
+    function(_args, n)
+      pcall(api.nvim_buf_set_lines, 0, 0, 0, true, { 'fzbu' .. tostring(n) })
+    end,
+    function() pcall(cmd, 'tabnext') end,
+  }
+
+  local CB_ON_LINES = {
+    function() pcall(api.nvim_win_close, 0, true) end,
+    function()  -- open float (different shape from CB_WINLEAVE)
+      local b = api.nvim_create_buf(false, true)
+      pcall(api.nvim_open_win, b, false, {
+        relative = 'editor', row = 0, col = 0, width = 12, height = 4,
+      })
+    end,
+    function(_args, n)  -- recursive set_lines (counted externally)
+      pcall(api.nvim_buf_set_lines, 0, 0, 0, true, { 'fzol' .. tostring(n) })
+    end,
+    function() end,
+    function()
+      local bs = api.nvim_list_bufs()
+      if #bs > 1 then
+        pcall(api.nvim_buf_delete, bs[#bs], { force = true })
+      end
+    end,
+    function() pcall(cmd, 'tabnew') end,
+  }
+
+  local CB_TABNEW = {
+    function()  -- nested nvim_open_tabpage (the original bug class)
+      local b = api.nvim_create_buf(false, true)
+      pcall(api.nvim_open_tabpage, b, false, {})
+    end,
+    function()  -- close current tab
+      if #api.nvim_list_tabpages() > 1 then
+        pcall(api.nvim_command, 'tabclose')
+      end
+    end,
+    function()  -- open a small float
+      local b = api.nvim_create_buf(false, true)
+      pcall(api.nvim_open_win, b, false, {
+        relative = 'editor', row = 0, col = 0, width = 8, height = 4,
+      })
+    end,
+    function() end,
+    function(_args, n)
+      pcall(api.nvim_buf_set_lines, 0, 0, 0, true, { 'fztn' .. tostring(n) })
+    end,
+    function()
+      pcall(api.nvim_exec_autocmds, 'User FzStub', {})
+    end,
+  }
+
+  return {
+    WINLEAVE = CB_WINLEAVE,
+    WINCLOSED = CB_WINCLOSED,
+    BUFUNLOAD = CB_BUFUNLOAD,
+    ON_LINES = CB_ON_LINES,
+    TABNEW = CB_TABNEW,
+  }
+end
+
+------------------------------------------------------------
+-- Argument serializer (for log= and replay= modes)
+--
+-- Serialize a Lua value as a Lua literal string that load() can
+-- re-evaluate.  Used by make_api_logger / make_cmd_logger to
+-- embed per-call args in a captured dispatch log.  The shape
+-- is a tuple table (so the consumer can reconstruct each arg
+-- via load() and dispatch on type).  Cycles are not allowed
+-- in nvim API args so we don't defend against them; opaque
+-- userdata/function/thread values get a string sentinel.
+------------------------------------------------------------
+
+function M.make_arg_serializer()
+  local function ser_arg(v)
+    local t = type(v)
+    if t == 'nil' then
+      return 'nil'
+    elseif t == 'boolean' then
+      return tostring(v)
+    elseif t == 'number' then
+      if v ~= v or v == math.huge or v == -math.huge then
+        return 'nil'
+      end
+      return tostring(v)
+    elseif t == 'string' then
+      return string.format('%q', v)
+    elseif t == 'table' then
+      local parts = {}
+      for k, vv in pairs(v) do
+        local ks
+        if type(k) == 'string' then
+          ks = '[' .. string.format('%q', k) .. ']'
+        elseif type(k) == 'number' then
+          ks = '[' .. tostring(k) .. ']'
+        else
+          ks = 'nil'
+        end
+        parts[#parts + 1] = ks .. '=' .. ser_arg(vv)
+      end
+      return '{' .. table.concat(parts, ',') .. '}'
+    else
+      return string.format('"<%s: not serializable>"', t)
+    end
+  end
+
+  local function ser_args(args)
+    local parts = {}
+    for i, a in ipairs(args) do
+      parts[i] = ser_arg(a)
+    end
+    return '{' .. table.concat(parts, ',') .. '}'
+  end
+
+  return ser_arg, ser_args
+end
+
+------------------------------------------------------------
+-- API / cmd proxies for log= mode
+--
+-- When a log file is being written, replace the caller's
+-- `api` and `cmd` with these proxies: every call is forwarded
+-- to vim.api / vim.cmd, but also emitted as one log line of
+-- the form `log.ops[#log.ops+1] = {...}` so bin/from-log.lua
+-- can translate the log into a standalone repro.lua.
+--
+-- round_idx_fn is a closure that returns the current 1-based
+-- round index (the fuzzer bumps it once per round).  round_ops
+-- is a {count=int} table shared with cmd_proxy; the cap is
+-- FUZZ_ROUND_OPS_CAP (0 = disabled).  Both are mutated in
+-- place so the proxies and the fuzzer see the same counter.
+--
+-- Stamping CURRENT_ROUND on each log line lets from-log.lua
+-- group ops by round and emit per-round teardown, matching
+-- the fuzzer's per-round state reset.
+------------------------------------------------------------
+
+function M.make_api_logger(opts)
+  local orig = opts.api
+  local ser_arg, ser_args = opts.ser_arg, opts.ser_args
+  local round_idx_fn = opts.round_idx_fn
+  local round_ops = opts.round_ops
+  local cap = opts.round_ops_cap
+  local log_fh = opts.log_fh
+  return setmetatable({}, { __index = function(_, k)
+    local v = rawget(orig, k) or orig[k]
+    if type(v) == 'function' then
+      return function(...)
+        if cap > 0 then
+          round_ops[1] = round_ops[1] + 1
+          if round_ops[1] > cap then return nil end
+        end
+        if log_fh then
+          local n = select('#', ...)
+          local args = { ... }
+          log_fh:write(string.format(
+            'log.ops[#log.ops+1] = {kind="api",name=%q,nargs=%d,'
+              .. 'sargs=%s,args=%s,round=%s}\n',
+            'vim.api.' .. k, n, string.format('%q', ser_args(args)),
+            ser_args(args), tostring(round_idx_fn() or 0)))
+          log_fh:flush()
+        end
+        return v(...)
+      end
+    end
+    return v
+  end })
+end
+
+function M.make_cmd_logger(opts)
+  local orig = opts.cmd
+  local ser_arg, ser_args = opts.ser_arg, opts.ser_args
+  local round_idx_fn = opts.round_idx_fn
+  local round_ops = opts.round_ops
+  local cap = opts.round_ops_cap
+  local log_fh = opts.log_fh
+  return setmetatable({}, { __index = function(_, k)
+    local v = rawget(orig, k) or orig[k]
+    if type(v) == 'function' then
+      return function(...)
+        if cap > 0 then
+          round_ops[1] = round_ops[1] + 1
+          if round_ops[1] > cap then return nil end
+        end
+        if log_fh then
+          local args = { ... }
+          log_fh:write(string.format(
+            'log.ops[#log.ops+1] = {kind="api",name=%q,nargs=%d,'
+              .. 'sargs=%s,args=%s,round=%s}\n',
+            'vim.cmd.' .. k, #args, string.format('%q', ser_args(args)),
+            ser_args(args), tostring(round_idx_fn() or 0)))
+          log_fh:flush()
+        end
+        return v(...)
+      end
+    end
+    return v
+  end, __call = function(_, ...)
+    if cap > 0 then
+      round_ops[1] = round_ops[1] + 1
+      if round_ops[1] > cap then return nil end
+    end
+    if log_fh then
+      local args = { ... }
+      log_fh:write(string.format(
+        'log.ops[#log.ops+1] = {kind="cmd_invocation",nargs=%d,'
+          .. 'sargs=%s,args=%s,round=%s}\n',
+        #args, string.format('%q', ser_args(args)), ser_args(args),
+        tostring(round_idx_fn() or 0)))
+      log_fh:flush()
+    end
+    return orig(...)
+  end })
+end
+
 return M
