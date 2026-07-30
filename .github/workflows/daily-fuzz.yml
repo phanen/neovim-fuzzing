@@ -40,7 +40,7 @@ concurrency:
 jobs:
   daily-fuzz:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       AFL_FUZZ_BIN: /usr/local/bin/afl-fuzz
       AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES: "1"

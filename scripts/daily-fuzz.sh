@@ -227,45 +227,96 @@ generate_repros() {
   [[ ${#crashes[@]} -gt 0 ]] || { echo "no crash inputs to process" >&2 ; return 0 ;}
 
   # Total wall-clock budget for this stage. Workflow timeout-minutes is
-  # 120; fuzz uses DURATION (default 60min); teardown + write_json_report
-  # need ~5min. Default 50min for repro+minimize leaves 5min slack.
-  local budget_sec="${GENERATE_REPROS_BUDGET_SEC:-3000}"
+  # 180; fuzz uses DURATION (default 60min); teardown + write_json_report
+  # need ~5min. Default 100min for repro+minimize leaves 15min slack.
+  local budget_sec="${GENERATE_REPROS_BUDGET_SEC:-6000}"
+  local per_worker_sec="${GENERATE_REPROS_PER_WORKER_SEC:-180}"
   local start_ts=$(date +%s)
-  export start_ts budget_sec REPRO_OUT ROOT \
+  export start_ts budget_sec per_worker_sec REPRO_OUT ROOT \
          ASAN_OPTIONS_FOR_REPRO="$REPRO_ASAN_OPTIONS"
 
-  echo "==> generating reporos for ${#crashes[@]} crash(es) (budget=${budget_sec}s, parallel=$(nproc))..."
+  echo "==> generating reporos for ${#crashes[@]} crash(es) (budget=${budget_sec}s, per-worker=${per_worker_sec}s, parallel=$(nproc))..."
 
   # Per-crash directory layout: reports/<date>/repros/<id>/{crash.bin,
   # repro.lua, repro.min.lua, verify.err}. The <id> matches what
   # write_md_report / write_json_report use, so the on-disk path and
   # the report's per-crash key line up.
-  printf '%s\n' "${crashes[@]}" \
-    | xargs -P "$(nproc)" -I{} bash -c '
-        set -euo pipefail
-        crash="$1"
-        elapsed=$(( $(date +%s) - start_ts ))
-        if (( elapsed >= budget_sec )); then
-          echo "  [$(basename "$crash")] SKIP (budget exhausted at ${elapsed}s)"
-          exit 0
-        fi
-        # Sanitize: colons break NTFS (artifact upload downloads as zip
-        # on Windows runners); matches write_json_report keying.
-        id=$(basename "$crash" | tr ",/:" "____")
-        out="$REPRO_OUT/$id/repro.lua"
-        mkdir -p "$(dirname "$out")"
-        # Preserve the raw AFL input bytes alongside the repro.
-        # Self-contained repros are lossy (from-log.lua rebuilds ops
-        # from the dispatch log; partial ASAN-aborted captures are not
-        # always recoverable); crash.bin is ground truth for re-fuzzing.
-        cp -f "$crash" "$REPRO_OUT/$id/crash.bin"
-        if ASAN_OPTIONS_FOR_REPRO="$ASAN_OPTIONS_FOR_REPRO" \
+  #
+  # We dispatch with bash background processes (not xargs) so every
+  # worker is a direct child of the main script. That means SIGTERM
+  # to the script group propagates to every worker via process-group
+  # teardown -- xargs instead forks workers into a separate process
+  # group that does NOT receive SIGTERM, which is what made the
+  # 60min+ repro run continue past the 120min job timeout and
+  # produce no report.json. Each worker is also wrapped in
+  # `timeout --kill-after` for a hard ceiling so one hung nvim cannot
+  # monopolize the per-crash slot.
+  local pids=()
+  for crash in "${crashes[@]}"; do
+    local elapsed=$(( $(date +%s) - start_ts ))
+    if (( elapsed >= budget_sec )); then
+      echo "  [$(basename "$crash")] SKIP (budget exhausted at ${elapsed}s)"
+      continue
+    fi
+    (
+      set -euo pipefail
+      # Sanitize: colons break NTFS (artifact upload downloads as zip
+      # on Windows runners); matches write_json_report keying.
+      id=$(basename "$crash" | tr ",/:" "____")
+      out="$REPRO_OUT/$id/repro.lua"
+      mkdir -p "$(dirname "$out")"
+      # Preserve the raw AFL input bytes alongside the repro.
+      # Self-contained repros are lossy (from-log.lua rebuilds ops
+      # from the dispatch log; partial ASAN-aborted captures are not
+      # always recoverable); crash.bin is ground truth for re-fuzzing.
+      cp -f "$crash" "$REPRO_OUT/$id/crash.bin"
+      # timeout --kill-after=10: SIGTERM at per_worker_sec, SIGKILL 10s
+      # later if nvim still hasn't exited. The 10s grace is enough for
+      # LSAN to abort cleanly but bounded so we never deadlock the
+      # budget on a single crashing bug.
+      if timeout --kill-after=10 "$per_worker_sec" \
+           env ASAN_OPTIONS_FOR_REPRO="$ASAN_OPTIONS_FOR_REPRO" \
              bash "$ROOT/scripts/repro-from-crash.sh" --minimize "$crash" "$out"; then
-          echo "  [$id] OK"
-        else
-          echo "  [$id] FAILED"
-        fi
-      ' _ {}
+        echo "  [$id] OK"
+      else
+        rc=$?
+        echo "  [$id] FAILED (rc=$rc, $(($(date +%s) - start_ts))s elapsed)"
+      fi
+    ) &
+    local worker_pid=$!
+    pids+=("$worker_pid")
+    _FZZ_WORKER_PIDS+=("$worker_pid")
+  done
+  # Wait for all workers, but if the budget is hit, kill the rest.
+  # `wait` with no args reaps all children; the loop only exits
+  # when every worker has finished (or been killed by timeout).
+  local waited=0
+  while (( ${#pids[@]} > 0 )) && (( waited < budget_sec )); do
+    local new_pids=()
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        new_pids+=("$pid")
+      fi
+    done
+    pids=("${new_pids[@]+"${new_pids[@]}"}")
+    if (( ${#pids[@]} == 0 )); then break; fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  # Hard cap: SIGTERM any remaining workers, then SIGKILL after 5s.
+  if (( ${#pids[@]} > 0 )); then
+    echo "==> budget reached; SIGTERMing ${#pids[@]} remaining worker(s)"
+    for pid in "${pids[@]}"; do
+      kill -TERM "$pid" 2>/dev/null || true
+    done
+    sleep 5
+    for pid in "${pids[@]}"; do
+      kill -KILL "$pid" 2>/dev/null || true
+    done
+  fi
+  # Reap all workers (the loop above already does this for completed
+  # ones; the wait below catches any stragglers).
+  wait 2>/dev/null || true
 }
 
 # Build report.json. The on-disk layout is report.json only; any
@@ -362,24 +413,42 @@ write_json_report() {
 
 # Top-level: run the pipeline. Each helper does its own error
 # handling so a missing crash dir doesn't bail the whole run.
-# write_json_report skips writing report.json when AFL produced no
-# crashes -- the CI commit step then sees nothing to persist.
+# write_json_report is invoked TWICE on purpose: once right after
+# afl_cmin_crashes so a baseline report.json (kind=raw, no repros
+# yet) is on disk before the slow generate_repros stage, and again
+# after generate_repros to fold any repros into the same JSON.
+# The baseline is what the CI commit step picks up if the job
+# timeout-minutes fires during repro generation -- without it,
+# a hung repro worker meant a 2h run produced no JSON to commit.
 main() {
   require_prereqs || return 1
   refresh_neovim   || return 1
   mkdir_corpus
   run_fuzz
   afl_cmin_crashes || true
+  write_json_report || true
   generate_repros
-  write_json_report
+  write_json_report || true
   echo
   echo "==> done. json: $REPORT_DIR/report.json"
   return 0
 }
 
 _on_term=0
-trap '_on_term=1; exit 143' TERM INT
+# All background workers (from generate_repros) are direct children
+# of this script, so we track their pids here for clean teardown.
+declare -a _FZZ_WORKER_PIDS=()
+_on_kill_workers() {
+  local sig="${1:-TERM}"
+  for pid in "${_FZZ_WORKER_PIDS[@]+"${_FZZ_WORKER_PIDS[@]}"}"; do
+    kill -"$sig" "$pid" 2>/dev/null || true
+  done
+}
+trap '_on_term=1; _on_kill_workers TERM; exit 143' TERM INT
 trap '
+  _on_kill_workers TERM
+  sleep 2
+  _on_kill_workers KILL
   if [[ "$_on_term" == 1 && -d "$REPORT_DIR" && ! -f "$REPORT_DIR/report.json" ]]; then
     write_json_report || true
   fi
