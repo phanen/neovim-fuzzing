@@ -113,6 +113,29 @@ emit('  end')
 emit('  return stub')
 emit('end')
 emit('')
+-- Stub callback forward declarations.
+--
+-- Some stub variants reference other stubs (cross-event recursion,
+-- e.g. a WinLeave variant that installs a WinClosed callback and
+-- vice versa). Lua locals are in scope from their declaration line
+-- to the end of the enclosing block, so any reference that appears
+-- BEFORE the matching `local _stub_cb_xxx = make_varied_stub(...)`
+-- rebinds a global to nil.  Pre-declaring every stub name up front
+-- reserves a local slot for each; the later `local _stub_cb_xxx =
+-- ...` reassigns the same slot rather than introducing a new one,
+-- so closures captured during the table literal correctly resolve
+-- to the locals and see their assigned values when invoked.
+local _stub_cb_winleave
+local _stub_cb_winclosed
+local _stub_cb_winclosed_buf
+local _stub_cb_bufunload
+local _stub_cb_on_lines
+emit('local _stub_cb_winleave')
+emit('local _stub_cb_winclosed')
+emit('local _stub_cb_winclosed_buf')
+emit('local _stub_cb_bufunload')
+emit('local _stub_cb_on_lines')
+
 emit('local _stub_cb_winleave = make_varied_stub({')
 emit('  function(_self, n)')
 emit('    local b = api.nvim_create_buf(false, true)')
