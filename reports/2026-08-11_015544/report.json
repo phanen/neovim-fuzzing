@@ -1,0 +1,47 @@
+{
+  "reporos": [
+    {
+      "id": "id_000000_sig_06_src_000000_time_1170722_execs_7800_op_havoc_rep_4",
+      "crash_file": "afl-findings/daily-2026-08-11/default/crashes/id:000000,sig:06,src:000000,time:1170722,execs:7800,op:havoc,rep:4",
+      "size_bytes": 914843,
+      "asan_lines": 0,
+      "kind": "full",
+      "rounds": 25
+    },
+    {
+      "id": "id_000001_sig_06_src_000000_time_2882568_execs_15529_op_havoc_rep_4",
+      "crash_file": "afl-findings/daily-2026-08-11/default/crashes/id:000001,sig:06,src:000000,time:2882568,execs:15529,op:havoc,rep:4",
+      "size_bytes": 874095,
+      "asan_lines": 0,
+      "kind": "full",
+      "rounds": 25
+    }
+  ],
+  "repo_rev": "aecd7ab",
+  "runtime": {
+    "capture_rounds": 25,
+    "afl_fuzz": {
+      "binary_sha256": "8205c84e32b8234fed5a323d7ab2bb1a83550a4e82f4c9230e32c2cfce8f6e91",
+      "version": "afl-fuzz++5.03a",
+      "patches": [
+        {
+          "sha256": "44a0daee9b0304d83ce99df49650aa9be611d7c13e9afd427981f1bd25f81e29",
+          "path": "patches/afl-forkserver.c.patch"
+        }
+      ]
+    },
+    "asan_options": "detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1:soft_rss_limit_mb=8192",
+    "nvim": {
+      "branch": "master",
+      "rev": "5f15c0e959",
+      "binary_sha256": "a1058f503204049c2afa1b33ad272537cb07eff10a5688ed45b3d91cc348ca2f",
+      "version_line": "nightly-367-g5f15c0e959-dirty"
+    }
+  },
+  "asan_in_repros": 0,
+  "saved_crashes": 3,
+  "date": "2026-08-11_015544",
+  "ts": "2026-08-11T01:55:44Z",
+  "duration": "3600s",
+  "reporos_generated": 2
+}
