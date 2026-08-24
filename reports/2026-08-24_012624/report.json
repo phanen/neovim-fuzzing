@@ -1,0 +1,63 @@
+{
+  "reporos": [
+    {
+      "id": "id_000000_sig_06_src_000000_time_825035_execs_4610_op_havoc_rep_8",
+      "crash_file": "afl-findings/daily-2026-08-24/default/crashes/id:000000,sig:06,src:000000,time:825035,execs:4610,op:havoc,rep:8",
+      "size_bytes": 204833,
+      "asan_lines": 0,
+      "kind": "full",
+      "rounds": 25
+    },
+    {
+      "id": "id_000001_sig_09_src_000001_time_1152679_execs_7002_op_trim_rep_4",
+      "crash_file": "afl-findings/daily-2026-08-24/default/crashes/id:000001,sig:09,src:000001,time:1152679,execs:7002,op:trim,rep:4",
+      "size_bytes": 139273,
+      "asan_lines": 0,
+      "kind": "full",
+      "rounds": 25
+    },
+    {
+      "id": "id_000002_sig_06_src_000001_time_2146247_execs_13530_op_havoc_rep_6",
+      "crash_file": "afl-findings/daily-2026-08-24/default/crashes/id:000002,sig:06,src:000001,time:2146247,execs:13530,op:havoc,rep:6",
+      "size_bytes": 16127,
+      "asan_lines": 0,
+      "kind": "full",
+      "rounds": 11
+    },
+    {
+      "id": "id_000003_sig_09_src_000001_time_3543761_execs_20717_op_havoc_rep_6",
+      "crash_file": "afl-findings/daily-2026-08-24/default/crashes/id:000003,sig:09,src:000001,time:3543761,execs:20717,op:havoc,rep:6",
+      "size_bytes": 540,
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0
+    }
+  ],
+  "repo_rev": "be4ee19",
+  "runtime": {
+    "capture_rounds": 25,
+    "afl_fuzz": {
+      "binary_sha256": "9b31cb1e30df444bd48e2e3a8df9c4fac2e30912ae62ef0f3101a71c20885776",
+      "version": "afl-fuzz++5.03a",
+      "patches": [
+        {
+          "sha256": "44a0daee9b0304d83ce99df49650aa9be611d7c13e9afd427981f1bd25f81e29",
+          "path": "patches/afl-forkserver.c.patch"
+        }
+      ]
+    },
+    "asan_options": "detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1:soft_rss_limit_mb=8192",
+    "nvim": {
+      "branch": "master",
+      "rev": "126398c090",
+      "binary_sha256": "e407a5ca090ff51e9cb027c5372da0446af68ee22c49870e8db483d9b6845169",
+      "version_line": "nightly-520-g126398c090-dirty"
+    }
+  },
+  "asan_in_repros": 0,
+  "saved_crashes": 5,
+  "date": "2026-08-24_012624",
+  "ts": "2026-08-24T01:26:24Z",
+  "duration": "3600s",
+  "reporos_generated": 3
+}
