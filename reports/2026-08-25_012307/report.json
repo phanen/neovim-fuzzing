@@ -1,0 +1,47 @@
+{
+  "ts": "2026-08-25T01:23:07Z",
+  "duration": "3600s",
+  "reporos_generated": 2,
+  "reporos": [
+    {
+      "size_bytes": 1451646,
+      "asan_lines": 0,
+      "kind": "full",
+      "rounds": 25,
+      "id": "id_000000_sig_06_src_000000_time_415852_execs_2349_op_flip1_pos_8",
+      "crash_file": "afl-findings/daily-2026-08-25/default/crashes/id:000000,sig:06,src:000000,time:415852,execs:2349,op:flip1,pos:8"
+    },
+    {
+      "size_bytes": 43661,
+      "asan_lines": 0,
+      "kind": "full",
+      "rounds": 25,
+      "id": "id_000001_sig_09_src_000001_time_2359561_execs_12122_op_trim_rep_2",
+      "crash_file": "afl-findings/daily-2026-08-25/default/crashes/id:000001,sig:09,src:000001,time:2359561,execs:12122,op:trim,rep:2"
+    }
+  ],
+  "repo_rev": "1436983",
+  "runtime": {
+    "nvim": {
+      "version_line": "nightly-532-g510f61555b-dirty",
+      "branch": "master",
+      "rev": "510f61555b",
+      "binary_sha256": "722782a7dc09a5db761a22b41dedb05beb565bec2913712365efd1a4e13a07f2"
+    },
+    "capture_rounds": 25,
+    "afl_fuzz": {
+      "patches": [
+        {
+          "sha256": "44a0daee9b0304d83ce99df49650aa9be611d7c13e9afd427981f1bd25f81e29",
+          "path": "patches/afl-forkserver.c.patch"
+        }
+      ],
+      "version": "afl-fuzz++5.03a",
+      "binary_sha256": "9b31cb1e30df444bd48e2e3a8df9c4fac2e30912ae62ef0f3101a71c20885776"
+    },
+    "asan_options": "detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1:soft_rss_limit_mb=8192"
+  },
+  "date": "2026-08-25_012307",
+  "asan_in_repros": 0,
+  "saved_crashes": 3
+}
