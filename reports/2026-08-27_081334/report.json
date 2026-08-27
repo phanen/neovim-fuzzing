@@ -1,0 +1,63 @@
+{
+  "asan_in_repros": 0,
+  "saved_crashes": 5,
+  "date": "2026-08-27_081334",
+  "ts": "2026-08-27T08:13:34Z",
+  "duration": "3600s",
+  "reporos_generated": 4,
+  "reporos": [
+    {
+      "kind": "full",
+      "rounds": 25,
+      "crash_file": "afl-findings/daily-2026-08-27/default/crashes/id:000000,sig:09,src:000001,time:519242,execs:4492,op:trim,rep:1",
+      "asan_lines": 0,
+      "size_bytes": 771372,
+      "id": "id_000000_sig_09_src_000001_time_519242_execs_4492_op_trim_rep_1"
+    },
+    {
+      "kind": "full",
+      "rounds": 25,
+      "crash_file": "afl-findings/daily-2026-08-27/default/crashes/id:000001,sig:09,src:000002,time:1206564,execs:7794,op:trim,rep:2",
+      "asan_lines": 0,
+      "size_bytes": 5220441,
+      "id": "id_000001_sig_09_src_000002_time_1206564_execs_7794_op_trim_rep_2"
+    },
+    {
+      "kind": "full",
+      "rounds": 25,
+      "crash_file": "afl-findings/daily-2026-08-27/default/crashes/id:000002,sig:09,src:000004,time:2290409,execs:11578,op:trim,rep:13",
+      "asan_lines": 0,
+      "size_bytes": 2520604,
+      "id": "id_000002_sig_09_src_000004_time_2290409_execs_11578_op_trim_rep_13"
+    },
+    {
+      "kind": "full",
+      "rounds": 25,
+      "crash_file": "afl-findings/daily-2026-08-27/default/crashes/id:000003,sig:09,src:000008,time:3497787,execs:21442,op:trim,rep:4",
+      "asan_lines": 0,
+      "size_bytes": 21603,
+      "id": "id_000003_sig_09_src_000008_time_3497787_execs_21442_op_trim_rep_4"
+    }
+  ],
+  "repo_rev": "debd75e",
+  "runtime": {
+    "afl_fuzz": {
+      "version": "afl-fuzz++5.03a",
+      "binary_sha256": "9b31cb1e30df444bd48e2e3a8df9c4fac2e30912ae62ef0f3101a71c20885776",
+      "patches": [
+        {
+          "sha256": "44a0daee9b0304d83ce99df49650aa9be611d7c13e9afd427981f1bd25f81e29",
+          "path": "patches/afl-forkserver.c.patch"
+        }
+      ]
+    },
+    "asan_options": "detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1:soft_rss_limit_mb=8192",
+    "nvim": {
+      "rev": "6eb36bcb2d",
+      "binary_sha256": "dcac18330b06262ce770a540278e9e16f0ffdb755f20d0413dc9e4aecd12a663",
+      "version_line": "nightly-560-g6eb36bcb2d-dirty",
+      "branch": "master"
+    },
+    "capture_rounds": 25
+  }
+}
