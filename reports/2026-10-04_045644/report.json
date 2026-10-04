@@ -1,0 +1,103 @@
+{
+  "saved_crashes": 10,
+  "ts": "2026-10-04T04:56:44Z",
+  "duration": "3600s",
+  "reporos_generated": 8,
+  "reporos": [
+    {
+      "crash_file": "afl-findings/daily-2026-10-04/default/crashes/id:000000,sig:06,src:000002,time:1402557,execs:7473,op:havoc,rep:6",
+      "asan_lines": 0,
+      "size_bytes": 20721,
+      "id": "id_000000_sig_06_src_000002_time_1402557_execs_7473_op_havoc_rep_6",
+      "kind": "full",
+      "rounds": 20
+    },
+    {
+      "crash_file": "afl-findings/daily-2026-10-04/default/crashes/id:000001,sig:06,src:000002,time:1523777,execs:8088,op:havoc,rep:7",
+      "asan_lines": 0,
+      "size_bytes": 16257,
+      "id": "id_000001_sig_06_src_000002_time_1523777_execs_8088_op_havoc_rep_7",
+      "kind": "full",
+      "rounds": 14
+    },
+    {
+      "crash_file": "afl-findings/daily-2026-10-04/default/crashes/id:000002,sig:06,src:000002,time:1524265,execs:8094,op:havoc,rep:8",
+      "asan_lines": 0,
+      "size_bytes": 18762,
+      "id": "id_000002_sig_06_src_000002_time_1524265_execs_8094_op_havoc_rep_8",
+      "kind": "full",
+      "rounds": 17
+    },
+    {
+      "crash_file": "afl-findings/daily-2026-10-04/default/crashes/id:000003,sig:06,src:000002,time:1609294,execs:8504,op:havoc,rep:12",
+      "asan_lines": 0,
+      "size_bytes": 16009,
+      "id": "id_000003_sig_06_src_000002_time_1609294_execs_8504_op_havoc_rep_12",
+      "kind": "full",
+      "rounds": 11
+    },
+    {
+      "crash_file": "afl-findings/daily-2026-10-04/default/crashes/id:000004,sig:06,src:000002,time:1814957,execs:9930,op:havoc,rep:11",
+      "asan_lines": 0,
+      "size_bytes": 14237,
+      "id": "id_000004_sig_06_src_000002_time_1814957_execs_9930_op_havoc_rep_11",
+      "kind": "full",
+      "rounds": 5
+    },
+    {
+      "crash_file": "afl-findings/daily-2026-10-04/default/crashes/id:000005,sig:06,src:000002,time:1903470,execs:10467,op:havoc,rep:12",
+      "asan_lines": 0,
+      "size_bytes": 78809,
+      "id": "id_000005_sig_06_src_000002_time_1903470_execs_10467_op_havoc_rep_12",
+      "kind": "full",
+      "rounds": 11
+    },
+    {
+      "crash_file": "afl-findings/daily-2026-10-04/default/crashes/id:000006,sig:06,src:000002,time:2030917,execs:10984,op:havoc,rep:8",
+      "asan_lines": 0,
+      "size_bytes": 75787,
+      "id": "id_000006_sig_06_src_000002_time_2030917_execs_10984_op_havoc_rep_8",
+      "kind": "full",
+      "rounds": 20
+    },
+    {
+      "crash_file": "afl-findings/daily-2026-10-04/default/crashes/id:000007,sig:09,src:000002,time:2096814,execs:11139,op:havoc,rep:6",
+      "asan_lines": 0,
+      "size_bytes": 1038,
+      "id": "id_000007_sig_09_src_000002_time_2096814_execs_11139_op_havoc_rep_6",
+      "kind": "raw",
+      "rounds": 0
+    },
+    {
+      "crash_file": "afl-findings/daily-2026-10-04/default/crashes/id:000008,sig:06,src:000002,time:2122560,execs:11350,op:havoc,rep:16",
+      "asan_lines": 0,
+      "size_bytes": 19620,
+      "id": "id_000008_sig_06_src_000002_time_2122560_execs_11350_op_havoc_rep_16",
+      "kind": "full",
+      "rounds": 22
+    }
+  ],
+  "repo_rev": "949c5a2",
+  "runtime": {
+    "nvim": {
+      "version_line": "nightly-1052-gfb1f321b0e-dirty",
+      "branch": "master",
+      "rev": "fb1f321b0e",
+      "binary_sha256": "49406c7899d69a58b0dfa37cf9818b5e1e4c83abc1d991112ab706ac8a5cb5ab"
+    },
+    "capture_rounds": 25,
+    "afl_fuzz": {
+      "binary_sha256": "acf549c21b213c8e4643efbe89da1c0656d82c5bb1fc651757c3b2b5fff18681",
+      "version": "afl-fuzz++5.03c",
+      "patches": [
+        {
+          "path": "patches/afl-forkserver.c.patch",
+          "sha256": "44a0daee9b0304d83ce99df49650aa9be611d7c13e9afd427981f1bd25f81e29"
+        }
+      ]
+    },
+    "asan_options": "detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1:soft_rss_limit_mb=8192"
+  },
+  "date": "2026-10-04_045644",
+  "asan_in_repros": 0
+}
