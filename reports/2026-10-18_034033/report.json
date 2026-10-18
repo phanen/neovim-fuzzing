@@ -1,0 +1,63 @@
+{
+  "asan_in_repros": 0,
+  "saved_crashes": 5,
+  "runtime": {
+    "nvim": {
+      "version_line": "nightly-1181-g0851e7dabe-dirty",
+      "branch": "master",
+      "rev": "0851e7dabe",
+      "binary_sha256": "0a1e76e506f946e2f59fd5740fad352993d342c36e50c60be61d5f1c5c126f21"
+    },
+    "capture_rounds": 25,
+    "afl_fuzz": {
+      "binary_sha256": "acf549c21b213c8e4643efbe89da1c0656d82c5bb1fc651757c3b2b5fff18681",
+      "version": "afl-fuzz++5.03c",
+      "patches": [
+        {
+          "path": "patches/afl-forkserver.c.patch",
+          "sha256": "44a0daee9b0304d83ce99df49650aa9be611d7c13e9afd427981f1bd25f81e29"
+        }
+      ]
+    },
+    "asan_options": "detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1:soft_rss_limit_mb=8192"
+  },
+  "ts": "2026-10-18T03:40:33Z",
+  "duration": "3600s",
+  "reporos_generated": 0,
+  "reporos": [
+    {
+      "size_bytes": 960,
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0,
+      "crash_file": "afl-findings/daily-2026-10-18/default/crashes/id:000000,sig:09,src:000004,time:1063046,execs:10729,op:int16,pos:28,val:be:+100",
+      "id": "id_000000_sig_09_src_000004_time_1063046_execs_10729_op_int16_pos_28_val_be_+100"
+    },
+    {
+      "size_bytes": 964,
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0,
+      "crash_file": "afl-findings/daily-2026-10-18/default/crashes/id:000001,sig:09,src:000004,time:1663979,execs:14309,op:havoc,rep:16",
+      "id": "id_000001_sig_09_src_000004_time_1663979_execs_14309_op_havoc_rep_16"
+    },
+    {
+      "size_bytes": 1033,
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0,
+      "crash_file": "afl-findings/daily-2026-10-18/default/crashes/id:000002,sig:09,src:000004,time:2231355,execs:17739,op:havoc,rep:16",
+      "id": "id_000002_sig_09_src_000004_time_2231355_execs_17739_op_havoc_rep_16"
+    },
+    {
+      "size_bytes": 1024,
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0,
+      "crash_file": "afl-findings/daily-2026-10-18/default/crashes/id:000003,sig:09,src:000031,time:2678723,execs:20540,op:trim,rep:12",
+      "id": "id_000003_sig_09_src_000031_time_2678723_execs_20540_op_trim_rep_12"
+    }
+  ],
+  "repo_rev": "f837d12",
+  "date": "2026-10-18_034033"
+}
