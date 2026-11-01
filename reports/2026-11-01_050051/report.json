@@ -1,0 +1,71 @@
+{
+  "reporos_generated": 0,
+  "reporos": [
+    {
+      "id": "id_000000_sig_09_src_000003_time_1852796_execs_11166_op_trim_rep_6",
+      "crash_file": "afl-findings/daily-2026-11-01/default/crashes/id:000000,sig:09,src:000003,time:1852796,execs:11166,op:trim,rep:6",
+      "size_bytes": 992,
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0
+    },
+    {
+      "id": "id_000001_sig_09_src_000003_time_2017568_execs_12136_op_havoc_rep_12",
+      "crash_file": "afl-findings/daily-2026-11-01/default/crashes/id:000001,sig:09,src:000003,time:2017568,execs:12136,op:havoc,rep:12",
+      "size_bytes": 1037,
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0
+    },
+    {
+      "id": "id_000002_sig_09_src_000003_time_2346952_execs_13606_op_havoc_rep_15",
+      "crash_file": "afl-findings/daily-2026-11-01/default/crashes/id:000002,sig:09,src:000003,time:2346952,execs:13606,op:havoc,rep:15",
+      "size_bytes": 1005,
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0
+    },
+    {
+      "id": "id_000003_sig_09_src_000003_time_2404696_execs_13752_op_havoc_rep_9",
+      "crash_file": "afl-findings/daily-2026-11-01/default/crashes/id:000003,sig:09,src:000003,time:2404696,execs:13752,op:havoc,rep:9",
+      "size_bytes": 1072,
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0
+    },
+    {
+      "id": "id_000004_sig_09_src_000003_time_2516600_execs_14296_op_havoc_rep_4",
+      "crash_file": "afl-findings/daily-2026-11-01/default/crashes/id:000004,sig:09,src:000003,time:2516600,execs:14296,op:havoc,rep:4",
+      "size_bytes": 1068,
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0
+    }
+  ],
+  "repo_rev": "4771dda",
+  "runtime": {
+    "nvim": {
+      "version_line": "nightly-1312-gfacba8d36b-dirty",
+      "branch": "master",
+      "rev": "facba8d36b",
+      "binary_sha256": "0cc9762a3dc85154a6c534daeba97a791435dba4f25d09080194a789c12ebfa5"
+    },
+    "capture_rounds": 25,
+    "afl_fuzz": {
+      "version": "afl-fuzz++5.04a",
+      "binary_sha256": "d9c48945e4e77eb45b605ee445b1e926a5684f39753e64515b42306c9aad58a7",
+      "patches": [
+        {
+          "path": "patches/afl-forkserver.c.patch",
+          "sha256": "44a0daee9b0304d83ce99df49650aa9be611d7c13e9afd427981f1bd25f81e29"
+        }
+      ]
+    },
+    "asan_options": "detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1:soft_rss_limit_mb=8192"
+  },
+  "asan_in_repros": 0,
+  "saved_crashes": 6,
+  "date": "2026-11-01_050051",
+  "ts": "2026-11-01T05:00:51Z",
+  "duration": "3600s"
+}
