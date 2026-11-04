@@ -1,0 +1,55 @@
+{
+  "saved_crashes": 4,
+  "runtime": {
+    "afl_fuzz": {
+      "patches": [
+        {
+          "path": "patches/afl-forkserver.c.patch",
+          "sha256": "44a0daee9b0304d83ce99df49650aa9be611d7c13e9afd427981f1bd25f81e29"
+        }
+      ],
+      "version": "afl-fuzz++5.04a",
+      "binary_sha256": "d9c48945e4e77eb45b605ee445b1e926a5684f39753e64515b42306c9aad58a7"
+    },
+    "asan_options": "detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1:soft_rss_limit_mb=8192",
+    "capture_rounds": 25,
+    "nvim": {
+      "rev": "b4d549f439",
+      "binary_sha256": "dde64b2100f0b06adcbce7e43e938abd8ee9257d8e62a0bed63f3c391b8f6846",
+      "version_line": "nightly-1338-gb4d549f439-dirty",
+      "branch": "master"
+    }
+  },
+  "ts": "2026-11-04T05:26:10Z",
+  "duration": "3600s",
+  "reporos_generated": 0,
+  "reporos": [
+    {
+      "crash_file": "afl-findings/daily-2026-11-04/default/crashes/id:000000,sig:09,src:000000,time:2108145,execs:20477,op:havoc,rep:1",
+      "id": "id_000000_sig_09_src_000000_time_2108145_execs_20477_op_havoc_rep_1",
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0,
+      "size_bytes": 1029
+    },
+    {
+      "crash_file": "afl-findings/daily-2026-11-04/default/crashes/id:000001,sig:09,src:000002,time:2435380,execs:23535,op:quick,pos:81,val:+0",
+      "id": "id_000001_sig_09_src_000002_time_2435380_execs_23535_op_quick_pos_81_val_+0",
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0,
+      "size_bytes": 1024
+    },
+    {
+      "crash_file": "afl-findings/daily-2026-11-04/default/crashes/id:000002,sig:09,src:000002,time:2820860,execs:25175,op:flip2,pos:84",
+      "id": "id_000002_sig_09_src_000002_time_2820860_execs_25175_op_flip2_pos_84",
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0,
+      "size_bytes": 1024
+    }
+  ],
+  "repo_rev": "11f108b",
+  "asan_in_repros": 0,
+  "date": "2026-11-04_052610"
+}
