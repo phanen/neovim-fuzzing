@@ -1,0 +1,63 @@
+{
+  "repo_rev": "8feb383",
+  "runtime": {
+    "afl_fuzz": {
+      "version": "afl-fuzz++5.04a",
+      "patches": [
+        {
+          "path": "patches/afl-forkserver.c.patch",
+          "sha256": "44a0daee9b0304d83ce99df49650aa9be611d7c13e9afd427981f1bd25f81e29"
+        }
+      ],
+      "binary_sha256": "d9c48945e4e77eb45b605ee445b1e926a5684f39753e64515b42306c9aad58a7"
+    },
+    "asan_options": "detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1:soft_rss_limit_mb=8192",
+    "nvim": {
+      "rev": "c868e1ab3d",
+      "binary_sha256": "98becaa290e5dd9193f22efc319c772396ec048627c4769bbb44b595f240c24a",
+      "version_line": "nightly-1387-gc868e1ab3d-dirty",
+      "branch": "master"
+    },
+    "capture_rounds": 25
+  },
+  "asan_in_repros": 0,
+  "saved_crashes": 5,
+  "date": "2026-11-08_050702",
+  "ts": "2026-11-08T05:07:02Z",
+  "duration": "3600s",
+  "reporos_generated": 0,
+  "reporos": [
+    {
+      "crash_file": "afl-findings/daily-2026-11-08/default/crashes/id:000000,sig:09,src:000000,time:353279,execs:3618,op:flip1,pos:292",
+      "id": "id_000000_sig_09_src_000000_time_353279_execs_3618_op_flip1_pos_292",
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0,
+      "size_bytes": 1024
+    },
+    {
+      "crash_file": "afl-findings/daily-2026-11-08/default/crashes/id:000001,sig:09,src:000000,time:2517948,execs:18533,op:havoc,rep:4",
+      "id": "id_000001_sig_09_src_000000_time_2517948_execs_18533_op_havoc_rep_4",
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0,
+      "size_bytes": 1070
+    },
+    {
+      "crash_file": "afl-findings/daily-2026-11-08/default/crashes/id:000002,sig:09,src:000000,time:2626071,execs:19088,op:havoc,rep:4",
+      "id": "id_000002_sig_09_src_000000_time_2626071_execs_19088_op_havoc_rep_4",
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0,
+      "size_bytes": 1050
+    },
+    {
+      "crash_file": "afl-findings/daily-2026-11-08/default/crashes/id:000003,sig:09,src:000001,time:3067017,execs:22053,op:havoc,rep:2",
+      "id": "id_000003_sig_09_src_000001_time_3067017_execs_22053_op_havoc_rep_2",
+      "asan_lines": 0,
+      "kind": "raw",
+      "rounds": 0,
+      "size_bytes": 630
+    }
+  ]
+}
